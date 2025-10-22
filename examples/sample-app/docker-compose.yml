@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  api:
+    image: node:18-alpine
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+    volumes:
+      # Mount secrets from env directory
+      - ./env:/run/secrets:ro
+    secrets:
+      - database_password
+      - api_key
+      - jwt_secret
+
+secrets:
+  database_password:
+    file: ./env/database_password
+  api_key:
+    file: ./env/api_key
+  jwt_secret:
+    file: ./env/jwt_secret

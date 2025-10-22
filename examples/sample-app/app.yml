@@ -1,0 +1,22 @@
+name: sample-app
+domain: sample-app.localhost
+port: 8080
+environment:
+  NODE_ENV: production
+  PORT: 8080
+services:
+  - name: web
+    image: caddy:2-alpine
+    port: 80
+    volumes:
+      - ./html:/srv
+      - ./caddy.conf:/etc/caddy/Caddyfile
+    command: ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
+  - name: api
+    image: node:18-alpine
+    port: 3000
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+    depends_on:
+      - web

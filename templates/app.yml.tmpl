@@ -1,0 +1,27 @@
+name: {{.Name}}
+domain: {{.Domain}}
+port: {{.Port}}
+environment:
+{{range $key, $value := .Environment}}
+  {{$key}}: {{$value}}
+{{end}}
+services:
+{{range .Services}}
+  - name: {{.Name}}
+    image: {{.Image}}
+    port: {{.Port}}
+    environment:
+{{range $key, $value := .Environment}}
+      {{$key}}: {{$value}}
+{{end}}
+    volumes:
+{{range .Volumes}}
+      - {{.}}
+{{end}}
+{{if .DependsOn}}
+    depends_on:
+{{range .DependsOn}}
+      - {{.}}
+{{end}}
+{{end}}
+{{end}}

@@ -1,0 +1,26 @@
+# {{.AppName}} Caddy Configuration
+# This file will be included in the main Portico Caddyfile
+
+{{.Domain}} {
+    # Serve static files from app directory
+    root * /home/portico/apps/{{.AppName}}/html
+    file_server
+    
+    # Proxy to API service
+    handle /api/* {
+        reverse_proxy localhost:3000
+    }
+    
+    # Logging
+    log {
+        output file /var/log/caddy/{{.AppName}}.log
+        format json
+    }
+    
+    # Security headers
+    header {
+        X-Content-Type-Options nosniff
+        X-Frame-Options DENY
+        X-XSS-Protection "1; mode=block"
+    }
+}
