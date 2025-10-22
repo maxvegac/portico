@@ -1,11 +1,20 @@
 #!/bin/bash
 
 # Portico Installation Script
-# Usage: curl -fsSL https://raw.githubusercontent.com/portico/portico/main/install.sh | bash
+# Usage: 
+#   curl -fsSL https://raw.githubusercontent.com/maxvegac/portico/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/maxvegac/portico/main/install.sh | bash -s -- --dev
 
 set -e
 
-echo "🚀 Installing Portico PaaS..."
+# Parse arguments
+DEV_MODE=false
+if [[ "$1" == "--dev" ]]; then
+    DEV_MODE=true
+    echo "🚀 Installing Portico PaaS (Development Mode)..."
+else
+    echo "🚀 Installing Portico PaaS..."
+fi
 
 # Colors for output
 RED='\033[0;31m'
@@ -66,178 +75,184 @@ echo -e "${BLUE}📁 Creating directories...${NC}"
 sudo mkdir -p /home/portico/{apps,reverse-proxy,static,logs}
 sudo chown -R portico:portico /home/portico
 
+# Function to check if a URL is accessible
+check_url() {
+    local url=$1
+    local name=$2
+    if curl -s --head "$url" | head -n 1 | grep -q "200 OK"; then
+        echo -e "${GREEN}✅ $name is available${NC}"
+        return 0
+    else
+        echo -e "${RED}❌ $name is not available at $url${NC}"
+        return 1
+    fi
+}
+
+# Function to download a file
+download_file() {
+    local url=$1
+    local output=$2
+    local name=$3
+    if curl -L "$url" -o "$output"; then
+        echo -e "${GREEN}✅ Downloaded $name${NC}"
+        return 0
+    else
+        echo -e "${RED}❌ Failed to download $name${NC}"
+        return 1
+    fi
+}
+
+# Verify all required files are available
+echo -e "${BLUE}🔍 Verifying all required files are available...${NC}"
+
+# Check for releases
+LATEST_RELEASE=$(curl -s https://api.github.com/repos/maxvegac/portico/releases/latest | grep "tag_name" | cut -d '"' -f 4)
+if [[ -z "$LATEST_RELEASE" ]]; then
+    echo -e "${RED}❌ No releases found${NC}"
+    echo -e "${YELLOW}💡 Please check: https://github.com/maxvegac/portico/releases${NC}"
+    exit 1
+fi
+
+# Check binary availability
+BINARY_NAME="portico-$OS-$ARCH"
+BINARY_URL="https://github.com/maxvegac/portico/releases/download/$LATEST_RELEASE/$BINARY_NAME"
+DEV_LATEST_URL="https://github.com/maxvegac/portico/releases/download/dev-latest/portico-dev-latest-$OS-$ARCH"
+
+if [[ "$DEV_MODE" == "true" ]]; then
+    # In dev mode, prefer dev-latest
+    if ! check_url "$DEV_LATEST_URL" "Portico dev-latest binary"; then
+        if ! check_url "$BINARY_URL" "Portico $LATEST_RELEASE binary"; then
+            echo -e "${RED}❌ No binaries available for download${NC}"
+            echo -e "${YELLOW}💡 Please check: https://github.com/maxvegac/portico/releases${NC}"
+            exit 1
+        fi
+    fi
+else
+    # In stable mode, prefer stable release
+    if ! check_url "$BINARY_URL" "Portico $LATEST_RELEASE binary"; then
+        if ! check_url "$DEV_LATEST_URL" "Portico dev-latest binary"; then
+            echo -e "${RED}❌ No binaries available for download${NC}"
+            echo -e "${YELLOW}💡 Please check: https://github.com/maxvegac/portico/releases${NC}"
+            exit 1
+        fi
+    fi
+fi
+
+# Check static files availability
+STATIC_FILES=(
+    "https://raw.githubusercontent.com/maxvegac/portico/main/static/index.html:Welcome page"
+    "https://raw.githubusercontent.com/maxvegac/portico/main/static/Caddyfile:Caddyfile"
+    "https://raw.githubusercontent.com/maxvegac/portico/main/static/config.yml:Configuration"
+    "https://raw.githubusercontent.com/maxvegac/portico/main/static/docker-compose.yml:Docker Compose"
+)
+
+for file_info in "${STATIC_FILES[@]}"; do
+    IFS=':' read -r url name <<< "$file_info"
+    if ! check_url "$url" "$name"; then
+        echo -e "${RED}❌ Required file $name is not available${NC}"
+        echo -e "${YELLOW}💡 Please check: https://github.com/maxvegac/portico${NC}"
+        exit 1
+    fi
+done
+
+echo -e "${GREEN}✅ All required files are available${NC}"
+
 # Download Portico CLI binary
 echo -e "${BLUE}📦 Downloading Portico CLI...${NC}"
 
-# Get latest release
-LATEST_RELEASE=$(curl -s https://api.github.com/repos/portico/portico/releases/latest | grep "tag_name" | cut -d '"' -f 4)
-if [[ -z "$LATEST_RELEASE" ]]; then
-    echo -e "${YELLOW}⚠️  No releases found, using development build...${NC}"
-    # Fallback to building from source
-    if ! command -v go &> /dev/null; then
-        echo -e "${BLUE}🔨 Installing Go...${NC}"
-        curl -fsSL https://go.dev/dl/go1.21.0.linux-amd64.tar.gz -o go.tar.gz
-        sudo tar -C /usr/local -xzf go.tar.gz
-        rm go.tar.gz
-        export PATH=$PATH:/usr/local/go/bin
+if [[ "$DEV_MODE" == "true" ]]; then
+    # In dev mode, prefer dev-latest
+    if check_url "$DEV_LATEST_URL" "Portico dev-latest binary"; then
+        echo -e "${BLUE}📦 Downloading Portico dev-latest...${NC}"
+        if download_file "$DEV_LATEST_URL" "/tmp/portico" "Portico dev-latest"; then
+            sudo mv /tmp/portico /usr/local/bin/portico
+            sudo chmod +x /usr/local/bin/portico
+        else
+            exit 1
+        fi
+    elif check_url "$BINARY_URL" "Portico $LATEST_RELEASE binary"; then
+        echo -e "${BLUE}📦 Downloading Portico $LATEST_RELEASE...${NC}"
+        if download_file "$BINARY_URL" "/tmp/portico" "Portico $LATEST_RELEASE"; then
+            sudo mv /tmp/portico /usr/local/bin/portico
+            sudo chmod +x /usr/local/bin/portico
+        else
+            exit 1
+        fi
+    else
+        echo -e "${RED}❌ No binaries available for download${NC}"
+        exit 1
     fi
-    
-    cd /tmp
-    git clone https://github.com/portico/portico.git
-    cd portico
-    go build -o portico ./cmd/portico
-    sudo cp portico /usr/local/bin/
-    sudo chmod +x /usr/local/bin/portico
-    cd /
-    rm -rf /tmp/portico
 else
-    echo -e "${BLUE}📦 Downloading Portico $LATEST_RELEASE...${NC}"
-    
-    # Download the appropriate binary
-    BINARY_NAME="portico-$OS-$ARCH"
-    if [[ "$OS" == "windows" ]]; then
-        BINARY_NAME="${BINARY_NAME}.exe"
+    # In stable mode, prefer stable release
+    if check_url "$BINARY_URL" "Portico $LATEST_RELEASE binary"; then
+        echo -e "${BLUE}📦 Downloading Portico $LATEST_RELEASE...${NC}"
+        if download_file "$BINARY_URL" "/tmp/portico" "Portico $LATEST_RELEASE"; then
+            sudo mv /tmp/portico /usr/local/bin/portico
+            sudo chmod +x /usr/local/bin/portico
+        else
+            exit 1
+        fi
+    elif check_url "$DEV_LATEST_URL" "Portico dev-latest binary"; then
+        echo -e "${BLUE}📦 Downloading Portico dev-latest...${NC}"
+        if download_file "$DEV_LATEST_URL" "/tmp/portico" "Portico dev-latest"; then
+            sudo mv /tmp/portico /usr/local/bin/portico
+            sudo chmod +x /usr/local/bin/portico
+        else
+            exit 1
+        fi
+    else
+        echo -e "${RED}❌ No binaries available for download${NC}"
+        exit 1
     fi
-    
-    # Download binary
-    DOWNLOAD_URL="https://github.com/portico/portico/releases/download/$LATEST_RELEASE/$BINARY_NAME"
-    echo -e "${BLUE}📥 Downloading from: $DOWNLOAD_URL${NC}"
-    
-    curl -L "$DOWNLOAD_URL" -o /tmp/portico
-    sudo mv /tmp/portico /usr/local/bin/portico
-    sudo chmod +x /usr/local/bin/portico
 fi
 
 # Create welcome page
-echo -e "${BLUE}📄 Creating welcome page...${NC}"
-sudo tee /home/portico/static/index.html > /dev/null << 'EOF'
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Portico - PaaS Platform</title>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh; display: flex; align-items: center; justify-content: center; color: white;
-        }
-        .container { text-align: center; max-width: 600px; padding: 2rem; }
-        .logo { font-size: 4rem; margin-bottom: 1rem; font-weight: 300; }
-        .title { font-size: 2.5rem; margin-bottom: 1rem; font-weight: 600; }
-        .subtitle { font-size: 1.2rem; margin-bottom: 2rem; opacity: 0.9; }
-        .status { background: rgba(255, 255, 255, 0.1); border: 1px solid rgba(255, 255, 255, 0.2);
-                  border-radius: 12px; padding: 1.5rem; margin: 2rem 0; backdrop-filter: blur(10px); }
-        .status-text { font-size: 1.1rem; font-weight: 500; }
-        .features { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-                    gap: 1rem; margin-top: 2rem; }
-        .feature { background: rgba(255, 255, 255, 0.05); border-radius: 8px; padding: 1rem;
-                   border: 1px solid rgba(255, 255, 255, 0.1); }
-        .feature-title { font-weight: 600; margin-bottom: 0.5rem; }
-        .feature-desc { font-size: 0.9rem; opacity: 0.8; }
-        .footer { margin-top: 3rem; opacity: 0.7; font-size: 0.9rem; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="logo">🚀</div>
-        <h1 class="title">Portico</h1>
-        <p class="subtitle">Platform as a Service</p>
-        <div class="status">
-            <div class="status-text">🎉 Congrats! Portico is running</div>
-        </div>
-        <div class="features">
-            <div class="feature">
-                <div class="feature-title">Caddy Proxy</div>
-                <div class="feature-desc">Automatic SSL and routing</div>
-            </div>
-            <div class="feature">
-                <div class="feature-title">Docker Compose</div>
-                <div class="feature-desc">Container orchestration</div>
-            </div>
-            <div class="feature">
-                <div class="feature-title">Secrets Management</div>
-                <div class="feature-desc">Secure configuration</div>
-            </div>
-            <div class="feature">
-                <div class="feature-title">Go CLI</div>
-                <div class="feature-desc">Easy application management</div>
-            </div>
-        </div>
-        <div class="footer">
-            <p>Ready to deploy your first application?</p>
-            <p><code>portico apps create my-app</code></p>
-        </div>
-    </div>
-</body>
-</html>
-EOF
+echo -e "${BLUE}📄 Setting up welcome page...${NC}"
 
-sudo chown portico:portico /home/portico/static/index.html
+# Download the welcome page from the repository
+WELCOME_URL="https://raw.githubusercontent.com/maxvegac/portico/main/static/index.html"
+if download_file "$WELCOME_URL" "/tmp/index.html" "Welcome page"; then
+    sudo mv /tmp/index.html /home/portico/static/index.html
+    sudo chown portico:portico /home/portico/static/index.html
+else
+    exit 1
+fi
 
 # Create initial Caddyfile
-echo -e "${BLUE}⚙️  Creating initial Caddyfile...${NC}"
-sudo tee /home/portico/reverse-proxy/Caddyfile > /dev/null << 'EOF'
-# Portico Caddyfile
-# Auto-generated by Portico
+echo -e "${BLUE}⚙️  Setting up Caddyfile...${NC}"
 
-# Default catch-all - serve Portico welcome page
-localhost {
-    root * /home/portico/static
-    file_server
-    
-    # Fallback to index.html for any route
-    try_files {path} /index.html
-    
-    # Logging
-    log {
-        output file /var/log/caddy/portico.log
-        format json
-    }
-}
-EOF
-
-sudo chown portico:portico /home/portico/reverse-proxy/Caddyfile
+# Download the Caddyfile from the repository
+CADDYFILE_URL="https://raw.githubusercontent.com/maxvegac/portico/main/static/Caddyfile"
+if download_file "$CADDYFILE_URL" "/tmp/Caddyfile" "Caddyfile"; then
+    sudo mv /tmp/Caddyfile /home/portico/reverse-proxy/Caddyfile
+    sudo chown portico:portico /home/portico/reverse-proxy/Caddyfile
+else
+    exit 1
+fi
 
 # Create portico config
-echo -e "${BLUE}📋 Creating Portico configuration...${NC}"
-sudo tee /home/portico/config.yml > /dev/null << 'EOF'
-portico_home: /home/portico
-apps_dir: /home/portico/apps
-proxy_dir: /home/portico/reverse-proxy
-registry:
-  type: internal
-  url: localhost:5000
-EOF
+echo -e "${BLUE}📋 Setting up Portico configuration...${NC}"
 
-sudo chown portico:portico /home/portico/config.yml
+# Download the config from the repository
+CONFIG_URL="https://raw.githubusercontent.com/maxvegac/portico/main/static/config.yml"
+if download_file "$CONFIG_URL" "/tmp/config.yml" "Configuration"; then
+    sudo mv /tmp/config.yml /home/portico/config.yml
+    sudo chown portico:portico /home/portico/config.yml
+else
+    exit 1
+fi
 
 # Create reverse-proxy docker-compose
-echo -e "${BLUE}🚀 Creating reverse-proxy with Docker...${NC}"
-sudo tee /home/portico/reverse-proxy/docker-compose.yml > /dev/null << 'EOF'
-version: '3.8'
+echo -e "${BLUE}🚀 Setting up reverse-proxy with Docker...${NC}"
 
-services:
-  caddy:
-    image: caddy:2-alpine
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile
-      - /home/portico/static:/home/portico/static
-      - caddy_data:/data
-      - caddy_config:/config
-    restart: unless-stopped
-
-volumes:
-  caddy_data:
-  caddy_config:
-EOF
-
-sudo chown portico:portico /home/portico/reverse-proxy/docker-compose.yml
+# Download the docker-compose from the repository
+COMPOSE_URL="https://raw.githubusercontent.com/maxvegac/portico/main/static/docker-compose.yml"
+if download_file "$COMPOSE_URL" "/tmp/docker-compose.yml" "Docker Compose configuration"; then
+    sudo mv /tmp/docker-compose.yml /home/portico/reverse-proxy/docker-compose.yml
+    sudo chown portico:portico /home/portico/reverse-proxy/docker-compose.yml
+else
+    exit 1
+fi
 
 # Start the reverse-proxy
 cd /home/portico/reverse-proxy
@@ -246,7 +261,14 @@ sudo -u portico docker-compose up -d
 echo ""
 echo -e "${GREEN}✅ Portico installation completed!${NC}"
 echo ""
-echo -e "${GREEN}🎉 Congrats! Portico is running${NC}"
+
+if [[ "$DEV_MODE" == "true" ]]; then
+    echo -e "${GREEN}🎉 Congrats! Portico Dev is running${NC}"
+    echo -e "${YELLOW}⚠️  Note: This is a development build with latest features${NC}"
+else
+    echo -e "${GREEN}🎉 Congrats! Portico is running${NC}"
+fi
+
 echo ""
 echo -e "${BLUE}📋 Next steps:${NC}"
 echo "   1. Visit http://localhost to see the welcome page"
@@ -261,6 +283,4 @@ echo "   portico apps destroy <name> # Destroy application"
 echo ""
 echo -e "${BLUE}📖 Check the logs:${NC}"
 echo "   docker-compose -f /home/portico/reverse-proxy/docker-compose.yml logs -f"
-echo ""
-echo -e "${YELLOW}⚠️  Note: You may need to log out and back in for Docker group changes to take effect.${NC}"
 echo ""

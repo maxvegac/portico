@@ -11,7 +11,7 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-# Get current version from git tags
+# Get current version from git tag
 get_current_version() {
     local version=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
     echo "${version#v}"
@@ -46,7 +46,7 @@ create_release() {
     git push origin "v$version"
     
     echo -e "${GREEN}✅ Release v$version created!${NC}"
-    echo -e "${BLUE}🔗 Check: https://github.com/portico/portico/releases${NC}"
+    echo -e "${BLUE}🔗 Check: https://github.com/maxvegac/portico/releases${NC}"
 }
 
 # Create a dev release
@@ -60,7 +60,7 @@ create_dev_release() {
     git push origin "v$version"
     
     echo -e "${GREEN}✅ Dev release v$version created!${NC}"
-    echo -e "${BLUE}🔗 Check: https://github.com/portico/portico/releases${NC}"
+    echo -e "${BLUE}🔗 Check: https://github.com/maxvegac/portico/releases${NC}"
 }
 
 # Show current version info

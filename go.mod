@@ -1,4 +1,4 @@
-module github.com/portico/portico
+module github.com/maxvegac/portico
 
 go 1.21
 
@@ -7,6 +7,8 @@ require (
 	github.com/spf13/viper v1.18.2
 	gopkg.in/yaml.v3 v3.0.1
 )
+
+replace github.com/maxvegac/portico => ./src
 
 require (
 	github.com/fsnotify/fsnotify v1.7.0 // indirect

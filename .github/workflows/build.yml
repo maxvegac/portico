@@ -1,0 +1,181 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [main, develop]
+    tags: ['v*']
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.25.3'
+    
+    - name: Download dependencies
+      run: go mod download
+    
+    - name: Tidy dependencies
+      run: go mod tidy
+    
+    - name: Run Go linter
+      uses: golangci/golangci-lint-action@v3
+      with:
+        version: latest
+        args: --timeout=5m
+    
+    - name: Run Go vet
+      run: go vet ./...
+    
+    - name: Run Go fmt check
+      run: |
+        if [ "$(gofmt -s -l . | wc -l)" -gt 0 ]; then
+          echo "The following files are not formatted:"
+          gofmt -s -l .
+          exit 1
+        fi
+    
+    - name: Run Go test
+      run: go test -v ./...
+    
+    - name: Verify project structure
+      run: |
+        echo "Project structure:"
+        find . -name "*.go" -type f | head -10
+        echo "Checking if src/cmd/portico exists:"
+        ls -la src/cmd/portico/ || echo "Directory not found"
+        echo "Current working directory:"
+        pwd
+        echo "Contents of current directory:"
+        ls -la
+    
+    - name: Determine version and release type
+      id: version
+      run: |
+        # Get current branch
+        BRANCH=${GITHUB_REF#refs/heads/}
+        if [[ "$GITHUB_REF" =~ ^refs/tags/ ]]; then
+          BRANCH="tag"
+        fi
+        
+        # Get commit hash
+        COMMIT=$(git rev-parse --short HEAD)
+        
+        if [[ "$BRANCH" == "tag" ]]; then
+          # This is a tag push - stable release
+          TAG_NAME=${GITHUB_REF#refs/tags/}
+          VERSION=${TAG_NAME#v}
+          RELEASE_NAME="Portico $TAG_NAME"
+          PRERELEASE=false
+          BINARY_PREFIX="portico"
+          echo "type=stable" >> $GITHUB_OUTPUT
+        elif [[ "$BRANCH" == "main" ]]; then
+          # This is main branch - dev-latest
+          VERSION="dev-latest"
+          RELEASE_NAME="Portico Development Latest"
+          PRERELEASE=true
+          BINARY_PREFIX="portico-dev-latest"
+          echo "type=dev-latest" >> $GITHUB_OUTPUT
+        else
+          # This is a feature branch - branch-commit
+          VERSION="${BRANCH}-${COMMIT}"
+          RELEASE_NAME="Portico $BRANCH-$COMMIT"
+          PRERELEASE=true
+          BINARY_PREFIX="portico-${BRANCH}"
+          echo "type=branch" >> $GITHUB_OUTPUT
+        fi
+        
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "release_name=$RELEASE_NAME" >> $GITHUB_OUTPUT
+        echo "prerelease=$PRERELEASE" >> $GITHUB_OUTPUT
+        echo "binary_prefix=$BINARY_PREFIX" >> $GITHUB_OUTPUT
+        echo "commit=$COMMIT" >> $GITHUB_OUTPUT
+        echo "branch=$BRANCH" >> $GITHUB_OUTPUT
+    
+    - name: Build binaries
+      run: |
+        mkdir -p dist
+        
+        platforms=(
+          "linux/amd64"
+          "linux/arm64"
+          "darwin/amd64"
+          "darwin/arm64"
+        )
+        
+        for platform in "${platforms[@]}"; do
+          os=$(echo $platform | cut -d'/' -f1)
+          arch=$(echo $platform | cut -d'/' -f2)
+          
+          echo "Building for $os/$arch..."
+          
+          # Build with version
+          GOOS=$os GOARCH=$arch go build \
+            -ldflags "-X main.version=${{ steps.version.outputs.version }}" \
+            -o "dist/${{ steps.version.outputs.binary_prefix }}-$os-$arch" \
+            ./src/cmd/portico
+        done
+    
+    - name: Create checksums
+      run: |
+        cd dist
+        sha256sum * > checksums.txt
+        cat checksums.txt
+    
+    - name: Create Release
+      if: github.event_name == 'push'
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ steps.version.outputs.version }}
+        name: ${{ steps.version.outputs.release_name }}
+        prerelease: ${{ steps.version.outputs.prerelease }}
+        files: |
+          dist/*
+        body: |
+          ## ${{ steps.version.outputs.release_name }}
+          
+          ${{ steps.version.outputs.type == 'stable' && '### Stable Release' || '' }}
+          ${{ steps.version.outputs.type == 'dev-latest' && '### Development Latest Build' || '' }}
+          ${{ steps.version.outputs.type == 'branch' && '### Feature Branch Build' || '' }}
+          
+          ${{ steps.version.outputs.type == 'dev-latest' && 'This is the latest development build from the `main` branch.' || '' }}
+          ${{ steps.version.outputs.type == 'branch' && 'This is a build from the `' + steps.version.outputs.branch + '` branch.' || '' }}
+          ${{ steps.version.outputs.type == 'stable' && 'This is a stable release.' || '' }}
+          
+          **Commit:** ${{ steps.version.outputs.commit }}
+          ${{ steps.version.outputs.type == 'branch' && '**Branch:** ' + steps.version.outputs.branch || '' }}
+          
+          ### Installation
+          
+          **Linux/macOS:**
+          ```bash
+          # Download the appropriate binary for your platform
+          # Then add to your PATH
+          ```
+          
+          ### What's New
+          ${{ steps.version.outputs.type == 'stable' && '- 🚀 Stable release features' || '' }}
+          ${{ steps.version.outputs.type == 'dev-latest' && '- 🚧 Latest development features' || '' }}
+          ${{ steps.version.outputs.type == 'branch' && '- 🧪 Experimental features from ' + steps.version.outputs.branch + ' branch' || '' }}
+          - 🐛 Bug fixes
+          - 🔧 Improvements
+          
+          ### Files
+          - `${{ steps.version.outputs.binary_prefix }}-linux-amd64` - Linux x86_64
+          - `${{ steps.version.outputs.binary_prefix }}-linux-arm64` - Linux ARM64
+          - `${{ steps.version.outputs.binary_prefix }}-darwin-amd64` - macOS x86_64
+          - `${{ steps.version.outputs.binary_prefix }}-darwin-arm64` - macOS ARM64 (Apple Silicon)
+          - `checksums.txt` - SHA256 checksums
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"text/template"
 
 	"gopkg.in/yaml.v3"
 )
@@ -24,6 +25,7 @@ type Service struct {
 	Port        int               `yaml:"port"`
 	Environment map[string]string `yaml:"environment"`
 	Volumes     []string          `yaml:"volumes"`
+	Secrets     []string          `yaml:"secrets"`
 	DependsOn   []string          `yaml:"depends_on"`
 }
 
@@ -69,7 +71,6 @@ func (am *AppManager) CreateApp(name string) error {
 					"NODE_ENV": "production",
 					"PORT":     "3000",
 				},
-				Secrets: []string{"database_password", "api_key", "jwt_secret"},
 			},
 		},
 	}

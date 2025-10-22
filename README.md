@@ -51,6 +51,9 @@ templates/
 ```bash
 # Install latest stable release
 curl -fsSL https://raw.githubusercontent.com/maxvegac/portico/main/install.sh | bash
+
+# Install development build
+curl -fsSL https://raw.githubusercontent.com/maxvegac/portico/main/install.sh | bash -s -- --dev
 ```
 
 ### Development Install
@@ -71,13 +74,40 @@ Visit http://localhost or the IP of your server to see the Portico welcome page 
 
 ## Version Management
 
-Portico uses semantic versioning with automatic releases:
+Portico uses an intelligent versioning system that automatically detects the context:
 
-### Version Types
+### 🏷️ **Stable Releases**
+- **Trigger**: Git tags (e.g., `v1.0.0`)
+- **Binary**: `portico-linux-amd64`
+- **Release**: GitHub release with binaries
+- **Installation**: `curl -fsSL https://raw.githubusercontent.com/maxvegac/portico/main/install.sh | bash`
 
-- **Stable releases** (`v1.0.0`): Tagged releases from `main` branch
-- **Dev releases** (`v1.0.0-dev-abc123`): Pre-releases from `develop` branch
-- **Development builds**: Built from source for development
+### 🚀 **Development Latest**
+- **Trigger**: Push to `main` branch
+- **Binary**: `portico-dev-latest-linux-amd64`
+- **Release**: GitHub prerelease (always updated)
+- **Installation**: `curl -fsSL https://raw.githubusercontent.com/maxvegac/portico/main/install.sh | bash`
+
+### 🌿 **Feature Branch Builds**
+- **Trigger**: Push to any branch (except `main`)
+- **Binary**: `portico-{branch}-{commit}-linux-amd64`
+- **Release**: GitHub prerelease
+- **Example**: `portico-feature-auth-abc1234-linux-amd64`
+
+### 📦 **Automatic Binary Generation**
+
+The system automatically generates the appropriate binary name based on context:
+
+```bash
+# Stable release
+portico v1.0.0                    # → portico-linux-amd64
+
+# Development latest  
+portico dev-latest                # → portico-dev-latest-linux-amd64
+
+# Feature branch
+portico feature-auth-abc1234      # → portico-feature-auth-linux-amd64
+```
 
 ### Creating Releases
 
@@ -90,12 +120,6 @@ Portico uses semantic versioning with automatic releases:
 
 # Create major release (1.0.0 -> 2.0.0)
 ./scripts/version.sh major
-
-# Create dev release
-./scripts/version.sh dev
-
-# Create custom release
-./scripts/version.sh release 1.2.3
 ```
 
 ### Automatic Builds

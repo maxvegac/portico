@@ -4,7 +4,7 @@
 
 # Build the Portico CLI
 build:
-	go build -o bin/portico ./cmd/portico
+	go build -o bin/portico ./src/cmd/portico
 
 # Install Portico CLI
 install: build
@@ -17,7 +17,34 @@ clean:
 
 # Run tests
 test:
-	go test ./...
+	go test -v ./...
+
+# Run linter
+lint:
+	golangci-lint run
+
+# Run linter with fix
+lint-fix:
+	golangci-lint run --fix
+
+# Run go vet
+vet:
+	go vet ./...
+
+# Run go fmt
+fmt:
+	go fmt ./...
+
+# Run go fmt check
+fmt-check:
+	@if [ "$$(gofmt -s -l . | wc -l)" -gt 0 ]; then \
+		echo "The following files are not formatted:"; \
+		gofmt -s -l .; \
+		exit 1; \
+	fi
+
+# Run all checks
+check: fmt-check vet lint test
 
 # Run the CLI
 run: build
@@ -27,6 +54,9 @@ run: build
 setup:
 	mkdir -p /home/portico/{apps,reverse-proxy,static}
 	cp static/index.html /home/portico/static/
+	cp static/Caddyfile /home/portico/reverse-proxy/
+	cp static/config.yml /home/portico/
+	cp static/docker-compose.yml /home/portico/reverse-proxy/
 	chown -R portico:portico /home/portico
 
 # Generate example docker-compose

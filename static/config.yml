@@ -1,0 +1,6 @@
+portico_home: /home/portico
+apps_dir: /home/portico/apps
+proxy_dir: /home/portico/reverse-proxy
+registry:
+  type: internal
+  url: localhost:5000
