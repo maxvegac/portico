@@ -63,7 +63,7 @@ func (am *AppManager) CreateApp(name string) error {
 		Services: []Service{
 			{
 				Name:    "api",
-				Image:   "node:18-alpine",
+				Image:   "node:22-alpine",
 				Port:    3000,
 				Environment: map[string]string{
 					"NODE_ENV": "production",

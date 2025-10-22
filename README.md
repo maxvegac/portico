@@ -1,4 +1,5 @@
 # Portico
+**License:** MIT  
 
 Portico is a Platform as a Service (PaaS) similar to Dokku, but with the following distinctive features:
 
@@ -18,7 +19,7 @@ Portico is a Platform as a Service (PaaS) similar to Dokku, but with the followi
 │   ├── Caddyfile
 │   └── docker-compose.yml          # Caddy reverse proxy
 ├── apps/
-│   └── WHATEVERAPP/
+│   └── your-app/
 │       ├── app.yml
 │       ├── docker-compose.yml      # Application services
 │       ├── caddy.conf
@@ -27,7 +28,7 @@ Portico is a Platform as a Service (PaaS) similar to Dokku, but with the followi
 │           ├── api_key
 │           └── jwt_secret
 ├── static/
-│   └── index.html                  # Welcome page
+│   └── index.html                  # Welcome page - Catch-all
 └── config.yml
 ```
 
@@ -49,14 +50,14 @@ templates/
 
 ```bash
 # Install latest stable release
-curl -fsSL https://raw.githubusercontent.com/portico/portico/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/maxvegac/portico/main/install.sh | bash
 ```
 
 ### Development Install
 
 ```bash
 # Clone the repository
-git clone https://github.com/portico/portico.git
+git clone https://github.com/maxvegac/portico.git
 cd portico
 
 # Build from source
@@ -64,30 +65,9 @@ make build
 sudo make install
 ```
 
-### Manual Installation
-
-```bash
-# 1. Create portico user
-sudo useradd -m -s /bin/bash portico
-
-# 2. Create directories
-sudo mkdir -p /home/portico/{apps,reverse-proxy,static}
-sudo chown -R portico:portico /home/portico
-
-# 3. Build and install CLI
-make build
-sudo make install
-
-# 4. Setup environment
-make setup
-
-# 5. Start Caddy service
-sudo systemctl start portico-caddy
-```
-
 ### Verify Installation
 
-Visit http://localhost to see the Portico welcome page with "🎉 Congrats! Portico is running"
+Visit http://localhost or the IP of your server to see the Portico welcome page with "🎉 Congrats! Portico is running"
 
 ## Version Management
 
@@ -153,3 +133,18 @@ Each application has:
 - `docker-compose.yml` - Service definitions
 - `caddy.conf` - Caddy configuration
 - `env/` - Secret files
+
+## Author
+
+**Maximiliano Vega** - [GitHub](https://github.com/maxvegac)
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## Acknowledgments
+
+- Inspired by [Dokku](https://dokku.com/)
+- Built with [Caddy](https://caddyserver.com/)
+- Powered by [Docker](https://www.docker.com/)
+- Written in [Go](https://golang.org/)
