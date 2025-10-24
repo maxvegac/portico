@@ -21,8 +21,26 @@ linters-settings:
     local-prefixes: github.com/maxvegac/portico
   golint:
     min-confidence: 0.8
+  depguard:
+    rules:
+      main:
+        allow:
+          - gopkg.in/yaml.v3
+          - github.com/spf13/cobra
+          - github.com/spf13/viper
+          - fmt
+          - os
+          - path/filepath
+          - text/template
+          - bufio
+          - bytes
+          - os/exec
+          - strings
+          - github.com/maxvegac/portico/src/internal/app
+          - github.com/maxvegac/portico/src/internal/config
+          - github.com/maxvegac/portico/src/internal/docker
+          - github.com/maxvegac/portico/src/internal/proxy
   govet:
-    check-shadowing: true
     settings:
       printf:
         funcs:
@@ -41,12 +59,10 @@ linters-settings:
 linters:
   enable:
     - bodyclose
-    - deadcode
     - depguard
     - dogsled
     - dupl
     - errcheck
-    - exportloopref
     - exhaustive
     - funlen
     - gochecknoinits
@@ -55,8 +71,8 @@ linters:
     - gocyclo
     - gofmt
     - goimports
-    - golint
-    - gomnd
+    - revive
+    - mnd
     - goprintffuncname
     - gosec
     - gosimple
@@ -68,28 +84,27 @@ linters:
     - noctx
     - nolintlint
     - rowserrcheck
+    - predeclared
     - staticcheck
-    - structcheck
     - stylecheck
     - typecheck
     - unconvert
     - unparam
     - unused
-    - varcheck
     - whitespace
 
 issues:
   exclude-rules:
     - path: _test\.go
       linters:
-        - gomnd
+        - mnd
         - goconst
         - funlen
         - gocyclo
         - lll
     - path: cmd/
       linters:
-        - gomnd
+        - mnd
     - path: internal/
       linters:
-        - gomnd
+        - mnd

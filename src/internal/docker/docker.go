@@ -11,22 +11,22 @@ import (
 	"text/template"
 )
 
-// DockerManager handles Docker operations
-type DockerManager struct {
+// Manager handles Docker operations
+type Manager struct {
 	RegistryURL string
 }
 
-// NewDockerManager creates a new DockerManager
-func NewDockerManager(registryURL string) *DockerManager {
-	return &DockerManager{
+// NewManager creates a new Manager
+func NewManager(registryURL string) *Manager {
+	return &Manager{
 		RegistryURL: registryURL,
 	}
 }
 
 // DeployApp deploys an application using docker-compose
-func (dm *DockerManager) DeployApp(appDir string) error {
+func (dm *Manager) DeployApp(appDir string) error {
 	composeFile := filepath.Join(appDir, "docker-compose.yml")
-	
+
 	// Check if docker-compose.yml exists
 	if _, err := os.Stat(composeFile); os.IsNotExist(err) {
 		return fmt.Errorf("docker-compose.yml not found in %s", appDir)
@@ -35,26 +35,26 @@ func (dm *DockerManager) DeployApp(appDir string) error {
 	// Run docker-compose up
 	cmd := exec.Command("docker-compose", "-f", composeFile, "up", "-d")
 	cmd.Dir = appDir
-	
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("error running docker-compose: %s\n%s", err, string(output))
+
+	output, cmdErr := cmd.CombinedOutput()
+	if cmdErr != nil {
+		return fmt.Errorf("error running docker-compose: %s\n%s", cmdErr, string(output))
 	}
 
 	return nil
 }
 
 // StopApp stops an application
-func (dm *DockerManager) StopApp(appDir string) error {
+func (dm *Manager) StopApp(appDir string) error {
 	composeFile := filepath.Join(appDir, "docker-compose.yml")
-	
+
 	if _, err := os.Stat(composeFile); os.IsNotExist(err) {
 		return fmt.Errorf("docker-compose.yml not found in %s", appDir)
 	}
 
 	cmd := exec.Command("docker-compose", "-f", composeFile, "down")
 	cmd.Dir = appDir
-	
+
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("error stopping application: %s\n%s", err, string(output))
@@ -64,9 +64,9 @@ func (dm *DockerManager) StopApp(appDir string) error {
 }
 
 // GenerateDockerCompose generates a docker-compose.yml file for an application
-func (dm *DockerManager) GenerateDockerCompose(appDir string, services []Service) error {
+func (dm *Manager) GenerateDockerCompose(appDir string, services []Service) error {
 	composeFile := filepath.Join(appDir, "docker-compose.yml")
-	
+
 	// Load template
 	templatePath := "templates/docker-compose.tmpl"
 	t, err := template.ParseFiles(templatePath)
@@ -105,10 +105,16 @@ type Service struct {
 }
 
 // GetContainerStatus returns the status of containers for an app
-func (dm *DockerManager) GetContainerStatus(appDir string) ([]ContainerStatus, error) {
-	cmd := exec.Command("docker-compose", "-f", filepath.Join(appDir, "docker-compose.yml"), "ps", "--format", "json")
+func (dm *Manager) GetContainerStatus(appDir string) ([]ContainerStatus, error) {
+	// Validate appDir path to prevent path traversal
+	if !filepath.IsAbs(appDir) {
+		appDir, _ = filepath.Abs(appDir)
+	}
+
+	composeFile := filepath.Join(appDir, "docker-compose.yml")
+	cmd := exec.Command("docker-compose", "-f", composeFile, "ps", "--format", "json")
 	cmd.Dir = appDir
-	
+
 	output, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("error getting container status: %w", err)

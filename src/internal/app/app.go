@@ -30,29 +30,29 @@ type Service struct {
 }
 
 // AppManager handles application operations
-type AppManager struct {
+type Manager struct {
 	AppsDir string
 }
 
-// NewAppManager creates a new AppManager
-func NewAppManager(appsDir string) *AppManager {
-	return &AppManager{
+// NewManager creates a new Manager
+func NewManager(appsDir string) *Manager {
+	return &Manager{
 		AppsDir: appsDir,
 	}
 }
 
 // CreateApp creates a new application
-func (am *AppManager) CreateApp(name string) error {
+func (am *Manager) CreateApp(name string) error {
 	appDir := filepath.Join(am.AppsDir, name)
-	
+
 	// Create app directory
-	if err := os.MkdirAll(appDir, 0755); err != nil {
+	if err := os.MkdirAll(appDir, 0o755); err != nil {
 		return fmt.Errorf("error creating app directory: %w", err)
 	}
 
 	// Create env directory
 	envDir := filepath.Join(appDir, "env")
-	if err := os.MkdirAll(envDir, 0755); err != nil {
+	if err := os.MkdirAll(envDir, 0o755); err != nil {
 		return fmt.Errorf("error creating env directory: %w", err)
 	}
 
@@ -64,9 +64,9 @@ func (am *AppManager) CreateApp(name string) error {
 		Environment: make(map[string]string),
 		Services: []Service{
 			{
-				Name:    "api",
-				Image:   "node:22-alpine",
-				Port:    3000,
+				Name:  "api",
+				Image: "node:22-alpine",
+				Port:  3000,
 				Environment: map[string]string{
 					"NODE_ENV": "production",
 					"PORT":     "3000",
@@ -89,7 +89,7 @@ func (am *AppManager) CreateApp(name string) error {
 }
 
 // SaveApp saves an application configuration
-func (am *AppManager) SaveApp(app *App) error {
+func (am *Manager) SaveApp(app *App) error {
 	appDir := filepath.Join(am.AppsDir, app.Name)
 	appFile := filepath.Join(appDir, "app.yml")
 
@@ -98,11 +98,11 @@ func (am *AppManager) SaveApp(app *App) error {
 		return fmt.Errorf("error marshaling app config: %w", err)
 	}
 
-	return os.WriteFile(appFile, data, 0644)
+	return os.WriteFile(appFile, data, 0o600)
 }
 
 // LoadApp loads an application configuration
-func (am *AppManager) LoadApp(name string) (*App, error) {
+func (am *Manager) LoadApp(name string) (*App, error) {
 	appDir := filepath.Join(am.AppsDir, name)
 	appFile := filepath.Join(appDir, "app.yml")
 
@@ -120,7 +120,7 @@ func (am *AppManager) LoadApp(name string) (*App, error) {
 }
 
 // ListApps returns a list of all applications
-func (am *AppManager) ListApps() ([]string, error) {
+func (am *Manager) ListApps() ([]string, error) {
 	entries, err := os.ReadDir(am.AppsDir)
 	if err != nil {
 		return nil, fmt.Errorf("error reading apps directory: %w", err)
@@ -137,18 +137,18 @@ func (am *AppManager) ListApps() ([]string, error) {
 }
 
 // DeleteApp deletes an application
-func (am *AppManager) DeleteApp(name string) error {
+func (am *Manager) DeleteApp(name string) error {
 	appDir := filepath.Join(am.AppsDir, name)
 	return os.RemoveAll(appDir)
 }
 
 // CreateDefaultCaddyConf creates a default caddy.conf file for an application
-func (am *AppManager) CreateDefaultCaddyConf(name string) error {
+func (am *Manager) CreateDefaultCaddyConf(name string) error {
 	appDir := filepath.Join(am.AppsDir, name)
 	caddyConfPath := filepath.Join(appDir, "caddy.conf")
-	
+
 	domain := fmt.Sprintf("%s.localhost", name)
-	
+
 	// Load template
 	templatePath := "templates/caddy-app.tmpl"
 	t, err := template.ParseFiles(templatePath)
@@ -178,20 +178,20 @@ func (am *AppManager) CreateDefaultCaddyConf(name string) error {
 }
 
 // CreateDefaultSecrets creates default secret files for an application
-func (am *AppManager) CreateDefaultSecrets(name string) error {
+func (am *Manager) CreateDefaultSecrets(name string) error {
 	appDir := filepath.Join(am.AppsDir, name)
 	envDir := filepath.Join(appDir, "env")
-	
+
 	// Create default secret files
 	secrets := map[string]string{
 		"database_password": "changeme123",
-		"api_key":          "sk-1234567890abcdef",
-		"jwt_secret":       "jwt-secret-key-very-long-and-secure",
+		"api_key":           "sk-1234567890abcdef",
+		"jwt_secret":        "jwt-secret-key-very-long-and-secure",
 	}
 
 	for secretName, defaultValue := range secrets {
 		secretPath := filepath.Join(envDir, secretName)
-		if err := os.WriteFile(secretPath, []byte(defaultValue), 0600); err != nil {
+		if err := os.WriteFile(secretPath, []byte(defaultValue), 0o600); err != nil {
 			return fmt.Errorf("error creating secret %s: %w", secretName, err)
 		}
 	}

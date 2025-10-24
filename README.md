@@ -72,63 +72,6 @@ sudo make install
 
 Visit http://localhost or the IP of your server to see the Portico welcome page with "🎉 Congrats! Portico is running"
 
-## Version Management
-
-Portico uses an intelligent versioning system that automatically detects the context:
-
-### 🏷️ **Stable Releases**
-- **Trigger**: Git tags (e.g., `v1.0.0`)
-- **Binary**: `portico-linux-amd64`
-- **Release**: GitHub release with binaries
-- **Installation**: `curl -fsSL https://raw.githubusercontent.com/maxvegac/portico/main/install.sh | bash`
-
-### 🚀 **Development Latest**
-- **Trigger**: Push to `main` branch
-- **Binary**: `portico-dev-latest-linux-amd64`
-- **Release**: GitHub prerelease (always updated)
-- **Installation**: `curl -fsSL https://raw.githubusercontent.com/maxvegac/portico/main/install.sh | bash`
-
-### 🌿 **Feature Branch Builds**
-- **Trigger**: Push to any branch (except `main`)
-- **Binary**: `portico-{branch}-{commit}-linux-amd64`
-- **Release**: GitHub prerelease
-- **Example**: `portico-feature-auth-abc1234-linux-amd64`
-
-### 📦 **Automatic Binary Generation**
-
-The system automatically generates the appropriate binary name based on context:
-
-```bash
-# Stable release
-portico v1.0.0                    # → portico-linux-amd64
-
-# Development latest  
-portico dev-latest                # → portico-dev-latest-linux-amd64
-
-# Feature branch
-portico feature-auth-abc1234      # → portico-feature-auth-linux-amd64
-```
-
-### Creating Releases
-
-```bash
-# Create patch release (1.0.0 -> 1.0.1)
-./scripts/version.sh patch
-
-# Create minor release (1.0.0 -> 1.1.0)
-./scripts/version.sh minor
-
-# Create major release (1.0.0 -> 2.0.0)
-./scripts/version.sh major
-```
-
-### Automatic Builds
-
-- **Push to `main`**: Creates stable release
-- **Push to `develop`**: Creates dev release  
-- **Create tag `v*`**: Creates stable release
-- **Pull Request**: Creates development build
-
 ## Usage
 
 ### Basic Commands

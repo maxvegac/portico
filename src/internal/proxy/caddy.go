@@ -22,9 +22,9 @@ func NewCaddyManager(configDir string) *CaddyManager {
 // UpdateCaddyfile updates the Caddyfile with current applications
 func (cm *CaddyManager) UpdateCaddyfile(appsDir string) error {
 	caddyfilePath := filepath.Join(cm.ConfigDir, "Caddyfile")
-	
+
 	// Ensure directory exists
-	if err := os.MkdirAll(cm.ConfigDir, 0755); err != nil {
+	if err := os.MkdirAll(cm.ConfigDir, 0o755); err != nil {
 		return fmt.Errorf("error creating proxy directory: %w", err)
 	}
 
@@ -39,11 +39,11 @@ func (cm *CaddyManager) UpdateCaddyfile(appsDir string) error {
 		if entry.IsDir() {
 			appName := entry.Name()
 			caddyConfPath := filepath.Join(appsDir, appName, "caddy.conf")
-			
+
 			// Check if caddy.conf exists
-			if _, err := os.Stat(caddyConfPath); err == nil {
+			if _, statErr := os.Stat(caddyConfPath); statErr == nil {
 				apps = append(apps, AppConfig{
-					Name:         appName,
+					Name:          appName,
 					CaddyConfPath: caddyConfPath,
 				})
 			}
@@ -78,9 +78,9 @@ func (cm *CaddyManager) UpdateCaddyfile(appsDir string) error {
 
 // AppConfig represents application configuration for Caddy
 type AppConfig struct {
-	Name         string
-	Domain       string
-	Port         int
+	Name          string
+	Domain        string
+	Port          int
 	CaddyConfPath string
 }
 

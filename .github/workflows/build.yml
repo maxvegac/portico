@@ -8,6 +8,9 @@ on:
     branches: [main, develop]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -119,7 +122,7 @@ jobs:
           arch=$(echo $platform | cut -d'/' -f2)
           
           echo "Building for $os/$arch..."
-          
+
           # Build with version
           GOOS=$os GOARCH=$arch go build \
             -ldflags "-X main.version=${{ steps.version.outputs.version }}" \
@@ -135,7 +138,7 @@ jobs:
     
     - name: Create Release
       if: github.event_name == 'push'
-      uses: softprops/action-gh-release@v1
+      uses: softprops/action-gh-release@v2
       with:
         tag_name: ${{ steps.version.outputs.version }}
         name: ${{ steps.version.outputs.release_name }}
@@ -150,11 +153,11 @@ jobs:
           ${{ steps.version.outputs.type == 'branch' && '### Feature Branch Build' || '' }}
           
           ${{ steps.version.outputs.type == 'dev-latest' && 'This is the latest development build from the `main` branch.' || '' }}
-          ${{ steps.version.outputs.type == 'branch' && 'This is a build from the `' + steps.version.outputs.branch + '` branch.' || '' }}
+          ${{ steps.version.outputs.type == 'branch' && format('This is a build from the `{0}` branch.', steps.version.outputs.branch) || '' }}
           ${{ steps.version.outputs.type == 'stable' && 'This is a stable release.' || '' }}
           
           **Commit:** ${{ steps.version.outputs.commit }}
-          ${{ steps.version.outputs.type == 'branch' && '**Branch:** ' + steps.version.outputs.branch || '' }}
+          ${{ steps.version.outputs.type == 'branch' && format('**Branch:** {0}', steps.version.outputs.branch) || '' }}
           
           ### Installation
           
@@ -167,7 +170,7 @@ jobs:
           ### What's New
           ${{ steps.version.outputs.type == 'stable' && '- 🚀 Stable release features' || '' }}
           ${{ steps.version.outputs.type == 'dev-latest' && '- 🚧 Latest development features' || '' }}
-          ${{ steps.version.outputs.type == 'branch' && '- 🧪 Experimental features from ' + steps.version.outputs.branch + ' branch' || '' }}
+          ${{ steps.version.outputs.type == 'branch' && format('- 🧪 Experimental features from {0} branch', steps.version.outputs.branch) || '' }}
           - 🐛 Bug fixes
           - 🔧 Improvements
           
@@ -177,5 +180,3 @@ jobs:
           - `${{ steps.version.outputs.binary_prefix }}-darwin-amd64` - macOS x86_64
           - `${{ steps.version.outputs.binary_prefix }}-darwin-arm64` - macOS ARM64 (Apple Silicon)
           - `checksums.txt` - SHA256 checksums
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

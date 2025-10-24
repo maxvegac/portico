@@ -10,9 +10,9 @@ import (
 
 // Config represents the Portico configuration
 type Config struct {
-	PorticoHome string `yaml:"portico_home"`
-	AppsDir     string `yaml:"apps_dir"`
-	ProxyDir    string `yaml:"proxy_dir"`
+	PorticoHome string         `yaml:"portico_home"`
+	AppsDir     string         `yaml:"apps_dir"`
+	ProxyDir    string         `yaml:"proxy_dir"`
 	Registry    RegistryConfig `yaml:"registry"`
 }
 
@@ -56,9 +56,9 @@ func LoadConfig() (*Config, error) {
 // SaveConfig saves the configuration to file
 func (c *Config) SaveConfig() error {
 	configPath := filepath.Join(c.PorticoHome, "config.yml")
-	
+
 	// Ensure directory exists
-	if err := os.MkdirAll(c.PorticoHome, 0755); err != nil {
+	if err := os.MkdirAll(c.PorticoHome, 0o755); err != nil {
 		return fmt.Errorf("error creating portico home directory: %w", err)
 	}
 
