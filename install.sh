@@ -71,6 +71,34 @@ echo -e "${BLUE}📁 Creating directories...${NC}"
 sudo mkdir -p /home/portico/{apps,reverse-proxy,static,logs}
 sudo chown -R portico:portico /home/portico
 
+# Configure group permissions for multi-user access
+echo -e "${BLUE}👥 Configuring group permissions...${NC}"
+
+# Ask if user wants to be added to portico group
+if ! groups $USER | grep -q '\bportico\b'; then
+    echo -e "${YELLOW}❓ Do you want to add user '$USER' to the 'portico' group?${NC}"
+    echo -e "${YELLOW}   This will allow you to access Portico files without sudo.${NC}"
+    echo -e "${YELLOW}   (y/N): ${NC}"
+    read -r response
+    if [[ "$response" =~ ^[Yy]$ ]]; then
+        echo -e "${BLUE}➕ Adding $USER to portico group...${NC}"
+        sudo usermod -aG portico $USER
+        echo -e "${GREEN}✅ User $USER has been added to the portico group${NC}"
+        echo -e "${YELLOW}⚠️  Note: You may need to log out and log back in for group changes to take effect${NC}"
+    else
+        echo -e "${BLUE}ℹ️  Skipping group addition. You can add yourself later with:${NC}"
+        echo -e "${BLUE}   sudo usermod -aG portico $USER${NC}"
+    fi
+else
+    echo -e "${GREEN}✅ User $USER is already in the portico group${NC}"
+fi
+
+# Set group permissions on portico directories
+echo -e "${BLUE}🔐 Setting group permissions...${NC}"
+sudo chmod -R g+rwX /home/portico
+sudo chmod g+s /home/portico/apps  # Set setgid bit so new files inherit group
+sudo chmod g+s /home/portico/reverse-proxy  # Set setgid bit so new files inherit group
+
 # Safer URL check: follow redirects, tolerate HEAD-not-allowed, and read final code.
 check_url() {
   local url="$1"
@@ -271,6 +299,19 @@ sudo -u portico bash -c 'cd /home/portico/reverse-proxy && docker compose up -d'
 
 echo ""
 echo -e "${GREEN}✅ Portico installation completed!${NC}"
+echo ""
+
+# Show group configuration info
+echo -e "${BLUE}📋 Group Configuration:${NC}"
+if groups $USER | grep -q '\bportico\b'; then
+    echo -e "  • User '$USER' is in the 'portico' group"
+    echo -e "  • You can access /home/portico directories without sudo"
+else
+    echo -e "  • User '$USER' is not in the 'portico' group"
+    echo -e "  • You may need to use sudo for some Portico commands"
+    echo -e "  • To add yourself later: sudo usermod -aG portico $USER"
+fi
+echo -e "  • You may need to log out and log back in for group changes to take effect"
 echo ""
 
 if [[ "$DEV_MODE" == "true" ]]; then

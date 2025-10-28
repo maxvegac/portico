@@ -241,22 +241,48 @@ func copyFile(src, dst string) error {
 		return copyFileWithSudo(src, dst, srcInfo.Mode())
 	}
 
-	// Create destination file
-	dstFile, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, srcInfo.Mode())
-	if err != nil {
-		return fmt.Errorf("error creating destination file: %w", err)
-	}
-	defer dstFile.Close()
+	// Use atomic update to avoid "text file busy" error
+	return atomicCopy(src, dst, srcInfo.Mode())
+}
 
-	// Copy file contents
-	_, err = io.Copy(dstFile, srcFile)
+// atomicCopy performs an atomic file copy to avoid "text file busy" errors
+func atomicCopy(src, dst string, mode os.FileMode) error {
+	// Create a temporary file in the same directory as destination
+	dstDir := filepath.Dir(dst)
+	tmpFile := filepath.Join(dstDir, ".portico-update-tmp-"+filepath.Base(dst))
+	
+	// Open source file
+	srcFile, err := os.Open(src)
 	if err != nil {
+		return fmt.Errorf("error opening source file: %w", err)
+	}
+	defer srcFile.Close()
+
+	// Create temporary destination file
+	tmpFileHandle, err := os.OpenFile(tmpFile, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode)
+	if err != nil {
+		return fmt.Errorf("error creating temporary file: %w", err)
+	}
+	defer tmpFileHandle.Close()
+
+	// Copy file contents to temporary file
+	_, err = io.Copy(tmpFileHandle, srcFile)
+	if err != nil {
+		os.Remove(tmpFile) // Clean up on error
 		return fmt.Errorf("error copying file contents: %w", err)
 	}
 
-	// Ensure destination file is written to disk
-	if err := dstFile.Sync(); err != nil {
-		return fmt.Errorf("error syncing destination file: %w", err)
+	// Ensure temporary file is written to disk
+	if err := tmpFileHandle.Sync(); err != nil {
+		os.Remove(tmpFile) // Clean up on error
+		return fmt.Errorf("error syncing temporary file: %w", err)
+	}
+	tmpFileHandle.Close() // Close before rename
+
+	// Atomically replace the destination file
+	if err := os.Rename(tmpFile, dst); err != nil {
+		os.Remove(tmpFile) // Clean up on error
+		return fmt.Errorf("error replacing destination file: %w", err)
 	}
 
 	return nil
@@ -322,25 +348,30 @@ func setFilePermissions(filePath string, mode os.FileMode) error {
 	if !filepath.IsAbs(filePath) {
 		filePath, _ = filepath.Abs(filePath)
 	}
-
+	
 	// Validate that the path is safe (no dangerous characters)
 	if strings.Contains(filePath, "..") || strings.Contains(filePath, "~") {
 		return fmt.Errorf("unsafe file path: %s", filePath)
 	}
-
+	
 	// Convert mode to octal string safely
 	permStr := fmt.Sprintf("%o", mode)
-
+	
 	// Validate that the permission string is safe (only digits 0-7)
 	for _, char := range permStr {
 		if char < '0' || char > '7' {
 			return fmt.Errorf("invalid permission mode: %s", permStr)
 		}
 	}
-
+	
 	// Use exec.Command with validated arguments
 	cmd := exec.Command("sudo", "chmod", permStr, filePath)
-	return cmd.Run()
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("sudo chmod failed: %w, output: %s", err, string(output))
+	}
+	
+	return nil
 }
 
 // copyFileWithSudoCmd safely copies a file using sudo
@@ -349,21 +380,26 @@ func copyFileWithSudoCmd(src, dst string) error {
 	if !filepath.IsAbs(src) {
 		src, _ = filepath.Abs(src)
 	}
-
+	
 	// Validate destination path
 	if !filepath.IsAbs(dst) {
 		dst, _ = filepath.Abs(dst)
 	}
-
+	
 	// Validate that paths are safe (no dangerous characters)
 	if strings.Contains(src, "..") || strings.Contains(src, "~") ||
 		strings.Contains(dst, "..") || strings.Contains(dst, "~") {
 		return fmt.Errorf("unsafe file path: src=%s, dst=%s", src, dst)
 	}
-
+	
 	// Use exec.Command with validated arguments
 	cmd := exec.Command("sudo", "cp", src, dst)
-	return cmd.Run()
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("sudo cp failed: %w, output: %s", err, string(output))
+	}
+	
+	return nil
 }
 
 // copyFileDirect copies a file directly without permission checks
