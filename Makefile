@@ -59,7 +59,7 @@ setup:
 	cp static/docker-compose.yml /home/portico/reverse-proxy/
 	chown -R portico:portico /home/portico
 
-# Generate example docker-compose
+# Generate example docker compose
 example:
 	portico apps create sample-app
 	cp examples/sample-app/* /home/portico/apps/sample-app/

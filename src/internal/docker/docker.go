@@ -23,7 +23,7 @@ func NewManager(registryURL string) *Manager {
 	}
 }
 
-// DeployApp deploys an application using docker-compose
+// DeployApp deploys an application using docker compose
 func (dm *Manager) DeployApp(appDir string) error {
 	composeFile := filepath.Join(appDir, "docker-compose.yml")
 
@@ -32,13 +32,13 @@ func (dm *Manager) DeployApp(appDir string) error {
 		return fmt.Errorf("docker-compose.yml not found in %s", appDir)
 	}
 
-	// Run docker-compose up
-	cmd := exec.Command("docker-compose", "-f", composeFile, "up", "-d")
+	// Run docker compose up
+	cmd := exec.Command("docker", "compose", "-f", composeFile, "up", "-d")
 	cmd.Dir = appDir
 
 	output, cmdErr := cmd.CombinedOutput()
 	if cmdErr != nil {
-		return fmt.Errorf("error running docker-compose: %s\n%s", cmdErr, string(output))
+		return fmt.Errorf("error running docker compose: %s\n%s", cmdErr, string(output))
 	}
 
 	return nil
@@ -52,7 +52,7 @@ func (dm *Manager) StopApp(appDir string) error {
 		return fmt.Errorf("docker-compose.yml not found in %s", appDir)
 	}
 
-	cmd := exec.Command("docker-compose", "-f", composeFile, "down")
+	cmd := exec.Command("docker", "compose", "-f", composeFile, "down")
 	cmd.Dir = appDir
 
 	output, err := cmd.CombinedOutput()
@@ -112,7 +112,7 @@ func (dm *Manager) GetContainerStatus(appDir string) ([]ContainerStatus, error) 
 	}
 
 	composeFile := filepath.Join(appDir, "docker-compose.yml")
-	cmd := exec.Command("docker-compose", "-f", composeFile, "ps", "--format", "json")
+	cmd := exec.Command("docker", "compose", "-f", composeFile, "ps", "--format", "json")
 	cmd.Dir = appDir
 
 	output, err := cmd.Output()

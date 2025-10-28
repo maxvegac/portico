@@ -50,13 +50,13 @@ fi
 
 # Check if docker compose is available
 if ! docker compose version &>/dev/null && ! command -v docker-compose &>/dev/null; then
-    echo -e "${YELLOW}🐳 docker-compose not found. Installing...${NC}"
+    echo -e "${YELLOW}🐳 docker compose not found. Installing...${NC}"
     sudo mkdir -p /usr/local/lib/docker/cli-plugins
     sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" \
         -o /usr/local/lib/docker/cli-plugins/docker-compose
     sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
 else
-    echo -e "${GREEN}✅ docker-compose is available${NC}"
+    echo -e "${GREEN}✅ docker compose is available${NC}"
 fi
 
 # Create portico user if it doesn't exist
@@ -254,10 +254,10 @@ else
     exit 1
 fi
 
-# Create reverse-proxy docker-compose
+# Create reverse-proxy docker compose
 echo -e "${BLUE}🚀 Setting up reverse-proxy with Docker...${NC}"
 
-# Download the docker-compose from the repository
+# Download the docker compose from the repository
 COMPOSE_URL="https://raw.githubusercontent.com/maxvegac/portico/main/static/docker-compose.yml"
 if download_file "$COMPOSE_URL" "/tmp/docker-compose.yml" "Docker Compose configuration"; then
     sudo mv /tmp/docker-compose.yml /home/portico/reverse-proxy/docker-compose.yml
@@ -293,5 +293,5 @@ echo "   portico apps deploy <name> # Deploy application"
 echo "   portico apps destroy <name> # Destroy application"
 echo ""
 echo -e "${BLUE}📖 Check the logs:${NC}"
-echo "   docker-compose -f /home/portico/reverse-proxy/docker-compose.yml logs -f"
+echo "   docker compose -f /home/portico/reverse-proxy/docker-compose.yml logs -f"
 echo ""

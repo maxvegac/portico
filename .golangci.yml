@@ -40,6 +40,7 @@ linters-settings:
           - github.com/maxvegac/portico/src/internal/config
           - github.com/maxvegac/portico/src/internal/docker
           - github.com/maxvegac/portico/src/internal/proxy
+          - github.com/maxvegac/portico/src/cmd/portico/commands
   govet:
     settings:
       printf:
