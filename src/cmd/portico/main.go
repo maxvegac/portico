@@ -16,16 +16,32 @@ var rootCmd = &cobra.Command{
 }
 
 func main() {
+	// Check for auto-updates before running any command
+	commands.CheckAutoUpdate()
+
 	// Create commands
 	versionCmd := commands.NewVersionCmd()
+	updateCmd := commands.NewUpdateCmd()
+	checkUpdateCmd := commands.NewCheckUpdateCmd()
+	autoUpdateCmd := commands.NewAutoUpdateCmd()
 	appsCmd := commands.NewAppsCmd()
 	appsListCmd := commands.NewAppsListCmd()
 	appsCreateCmd := commands.NewAppsCreateCmd()
 	appsDeployCmd := commands.NewAppsDeployCmd()
 	appsDestroyCmd := commands.NewAppsDestroyCmd()
 
+	// Add flags to update command
+	updateCmd.Flags().Bool("dev", false, "Check for development releases instead of stable releases")
+	checkUpdateCmd.Flags().Bool("dev", false, "Check for development releases instead of stable releases")
+	autoUpdateCmd.Flags().Bool("enable", false, "Enable automatic updates")
+	autoUpdateCmd.Flags().Bool("disable", false, "Disable automatic updates")
+	autoUpdateCmd.Flags().Bool("status", false, "Show auto-update status")
+
 	// Add commands to root
 	rootCmd.AddCommand(versionCmd)
+	rootCmd.AddCommand(updateCmd)
+	rootCmd.AddCommand(checkUpdateCmd)
+	rootCmd.AddCommand(autoUpdateCmd)
 	rootCmd.AddCommand(appsCmd)
 
 	// Add subcommands to apps

@@ -36,6 +36,12 @@ linters-settings:
           - bytes
           - os/exec
           - strings
+          - time
+          - context
+          - encoding/json
+          - io
+          - net/http
+          - runtime
           - github.com/maxvegac/portico/src/internal/app
           - github.com/maxvegac/portico/src/internal/config
           - github.com/maxvegac/portico/src/internal/docker
