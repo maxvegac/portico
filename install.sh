@@ -23,12 +23,6 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Check if running as root
-if [[ $EUID -eq 0 ]]; then
-   echo -e "${RED}❌ Please do not run this script as root${NC}"
-   exit 1
-fi
-
 # Detect OS and architecture
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m)
@@ -54,11 +48,13 @@ else
     echo -e "${GREEN}✅ Docker is already installed${NC}"
 fi
 
-# Check if docker-compose is available
-if ! command -v docker-compose &> /dev/null && ! docker compose version &> /dev/null; then
+# Check if docker compose is available
+if ! docker compose version &>/dev/null && ! command -v docker-compose &>/dev/null; then
     echo -e "${YELLOW}🐳 docker-compose not found. Installing...${NC}"
-    sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-    sudo chmod +x /usr/local/bin/docker-compose
+    sudo mkdir -p /usr/local/lib/docker/cli-plugins
+    sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" \
+        -o /usr/local/lib/docker/cli-plugins/docker-compose
+    sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
 else
     echo -e "${GREEN}✅ docker-compose is available${NC}"
 fi
@@ -75,31 +71,44 @@ echo -e "${BLUE}📁 Creating directories...${NC}"
 sudo mkdir -p /home/portico/{apps,reverse-proxy,static,logs}
 sudo chown -R portico:portico /home/portico
 
-# Function to check if a URL is accessible
+# Safer URL check: follow redirects, tolerate HEAD-not-allowed, and read final code.
 check_url() {
-    local url=$1
-    local name=$2
-    if curl -s --head "$url" | head -n 1 | grep -q "200 OK"; then
-        echo -e "${GREEN}✅ $name is available${NC}"
-        return 0
-    else
-        echo -e "${RED}❌ $name is not available at $url${NC}"
-        return 1
-    fi
+  local url="$1"
+  local name="$2"
+
+  # Try HEAD following redirects; if HEAD unsupported, do a minimal GET (range 0-0)
+  local code
+  code=$(curl -sS -I -L -o /dev/null -w '%{http_code}' --connect-timeout 10 --max-time 30 "$url") || code=0
+  if [ "$code" -eq 405 ] || [ "$code" -eq 0 ]; then
+    code=$(curl -sS -L -o /dev/null -r 0-0 -w '%{http_code}' --connect-timeout 10 --max-time 30 "$url") || code=0
+  fi
+
+  # For availability checks, require a final 200 on GET/ranged GET
+  if [ "$code" -eq 200 ]; then
+    echo -e "${GREEN}✅ $name is available${NC}"
+    return 0
+  else
+    echo -e "${RED}❌ $name is not available at $url (HTTP ${code})${NC}"
+    return 1
+  fi
 }
 
-# Function to download a file
 download_file() {
-    local url=$1
-    local output=$2
-    local name=$3
-    if curl -L "$url" -o "$output"; then
-        echo -e "${GREEN}✅ Downloaded $name${NC}"
-        return 0
-    else
-        echo -e "${RED}❌ Failed to download $name${NC}"
-        return 1
-    fi
+  local url="$1"
+  local output="$2"
+  local name="$3"
+
+  # Follow redirects and fail on 4xx/5xx
+  if curl -sS -L --fail-with-body --connect-timeout 15 --max-time 0 -o "$output" "$url"; then
+    echo -e "${GREEN}✅ Downloaded $name${NC}"
+    return 0
+  else
+    local ec=$?
+    echo -e "${RED}❌ Failed to download $name (curl exit $ec)${NC}"
+    # For debugging, uncomment:
+    # curl -I -L "$url"
+    return 1
+  fi
 }
 
 # Verify all required files are available
@@ -140,19 +149,20 @@ fi
 
 # Check static files availability
 STATIC_FILES=(
-    "https://raw.githubusercontent.com/maxvegac/portico/main/static/index.html:Welcome page"
-    "https://raw.githubusercontent.com/maxvegac/portico/main/static/Caddyfile:Caddyfile"
-    "https://raw.githubusercontent.com/maxvegac/portico/main/static/config.yml:Configuration"
-    "https://raw.githubusercontent.com/maxvegac/portico/main/static/docker-compose.yml:Docker Compose"
+  "https://raw.githubusercontent.com/maxvegac/portico/main/static/index.html"   "Welcome page"
+  "https://raw.githubusercontent.com/maxvegac/portico/main/static/Caddyfile"    "Caddyfile"
+  "https://raw.githubusercontent.com/maxvegac/portico/main/static/config.yml"   "Configuration"
+  "https://raw.githubusercontent.com/maxvegac/portico/main/static/docker-compose.yml" "Docker Compose"
 )
 
-for file_info in "${STATIC_FILES[@]}"; do
-    IFS=':' read -r url name <<< "$file_info"
-    if ! check_url "$url" "$name"; then
-        echo -e "${RED}❌ Required file $name is not available${NC}"
-        echo -e "${YELLOW}💡 Please check: https://github.com/maxvegac/portico${NC}"
-        exit 1
-    fi
+for ((i=0; i<${#STATIC_FILES[@]}; i+=2)); do
+  url=${STATIC_FILES[i]}
+  name=${STATIC_FILES[i+1]}
+  if ! check_url "$url" "$name"; then
+    echo -e "${RED}❌ Required file $name is not available${NC}"
+    echo -e "${YELLOW}💡 Please check: https://github.com/maxvegac/portico${NC}"
+    exit 1
+  fi
 done
 
 echo -e "${GREEN}✅ All required files are available${NC}"
@@ -212,6 +222,7 @@ echo -e "${BLUE}📄 Setting up welcome page...${NC}"
 # Download the welcome page from the repository
 WELCOME_URL="https://raw.githubusercontent.com/maxvegac/portico/main/static/index.html"
 if download_file "$WELCOME_URL" "/tmp/index.html" "Welcome page"; then
+    sudo mkdir -p /home/portico/static
     sudo mv /tmp/index.html /home/portico/static/index.html
     sudo chown portico:portico /home/portico/static/index.html
 else
@@ -224,6 +235,7 @@ echo -e "${BLUE}⚙️  Setting up Caddyfile...${NC}"
 # Download the Caddyfile from the repository
 CADDYFILE_URL="https://raw.githubusercontent.com/maxvegac/portico/main/static/Caddyfile"
 if download_file "$CADDYFILE_URL" "/tmp/Caddyfile" "Caddyfile"; then
+    sudo mkdir -p /home/portico/reverse-proxy
     sudo mv /tmp/Caddyfile /home/portico/reverse-proxy/Caddyfile
     sudo chown portico:portico /home/portico/reverse-proxy/Caddyfile
 else
@@ -255,8 +267,7 @@ else
 fi
 
 # Start the reverse-proxy
-cd /home/portico/reverse-proxy
-sudo -u portico docker-compose up -d
+sudo -u portico bash -c 'cd /home/portico/reverse-proxy && docker compose up -d'
 
 echo ""
 echo -e "${GREEN}✅ Portico installation completed!${NC}"
