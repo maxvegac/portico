@@ -31,13 +31,15 @@ type Service struct {
 
 // AppManager handles application operations
 type Manager struct {
-	AppsDir string
+	AppsDir      string
+	TemplatesDir string
 }
 
 // NewManager creates a new Manager
-func NewManager(appsDir string) *Manager {
+func NewManager(appsDir, templatesDir string) *Manager {
 	return &Manager{
-		AppsDir: appsDir,
+		AppsDir:      appsDir,
+		TemplatesDir: templatesDir,
 	}
 }
 
@@ -79,8 +81,8 @@ func (am *Manager) CreateApp(name string) error {
 		return err
 	}
 
-	// Create default caddy.conf
-	if err := am.CreateDefaultCaddyConf(name); err != nil {
+	// Create default Caddyfile
+	if err := am.CreateDefaultCaddyfile(name); err != nil {
 		return err
 	}
 
@@ -142,34 +144,52 @@ func (am *Manager) DeleteApp(name string) error {
 	return os.RemoveAll(appDir)
 }
 
-// CreateDefaultCaddyConf creates a default caddy.conf file for an application
-func (am *Manager) CreateDefaultCaddyConf(name string) error {
+// CreateDefaultCaddyfile creates a default Caddyfile for an application
+func (am *Manager) CreateDefaultCaddyfile(name string) error {
 	appDir := filepath.Join(am.AppsDir, name)
-	caddyConfPath := filepath.Join(appDir, "caddy.conf")
+	caddyfilePath := filepath.Join(appDir, "Caddyfile")
 
-	domain := fmt.Sprintf("%s.localhost", name)
+	// Load app configuration to get the domain
+	app, err := am.LoadApp(name)
+	if err != nil {
+		return fmt.Errorf("error loading app configuration: %w", err)
+	}
 
-	// Load template
-	templatePath := "templates/caddy-app.tmpl"
+	// Use domain from app configuration, fallback to default if empty
+	domain := app.Domain
+	if domain == "" {
+		domain = fmt.Sprintf("%s.localhost", name)
+	}
+
+	// Load template from configured templates directory
+	templatePath := filepath.Join(am.TemplatesDir, "caddy-app.tmpl")
 	t, err := template.ParseFiles(templatePath)
 	if err != nil {
 		return fmt.Errorf("error parsing caddy-app template: %w", err)
 	}
 
 	// Create output file
-	file, err := os.Create(caddyConfPath)
+	file, err := os.Create(caddyfilePath)
 	if err != nil {
-		return fmt.Errorf("error creating caddy.conf: %w", err)
+		return fmt.Errorf("error creating Caddyfile: %w", err)
 	}
 	defer file.Close()
+
+	// Use port from app configuration, fallback to default if 0
+	port := app.Port
+	if port == 0 {
+		port = 8080
+	}
 
 	// Execute template
 	if err := t.Execute(file, struct {
 		AppName string
 		Domain  string
+		Port    int
 	}{
 		AppName: name,
 		Domain:  domain,
+		Port:    port,
 	}); err != nil {
 		return fmt.Errorf("error executing caddy-app template: %w", err)
 	}

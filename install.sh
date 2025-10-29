@@ -23,6 +23,45 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
+# Download file function
+download_file() {
+  local url="$1"
+  local output="$2"
+  local name="$3"
+
+  # Follow redirects and fail on 4xx/5xx
+  if curl -sS -L --fail-with-body --connect-timeout 15 --max-time 0 -o "$output" "$url"; then
+    echo -e "${GREEN}✅ Downloaded $name${NC}"
+    return 0
+  else
+    local ec=$?
+    echo -e "${RED}❌ Failed to download $name (curl exit $ec)${NC}"
+    return 1
+  fi
+}
+
+# Safer URL check: follow redirects, tolerate HEAD-not-allowed, and read final code.
+check_url() {
+  local url="$1"
+  local name="$2"
+
+  # Try HEAD following redirects; if HEAD unsupported, do a minimal GET (range 0-0)
+  local code
+  code=$(curl -sS -I -L -o /dev/null -w '%{http_code}' --connect-timeout 10 --max-time 30 "$url") || code=0
+  if [ "$code" -eq 405 ] || [ "$code" -eq 0 ]; then
+    code=$(curl -sS -L -o /dev/null -r 0-0 -w '%{http_code}' --connect-timeout 10 --max-time 30 "$url") || code=0
+  fi
+
+  # For availability checks, require a final 200 on GET/ranged GET
+  if [ "$code" -eq 200 ]; then
+    echo -e "${GREEN}✅ $name is available${NC}"
+    return 0
+  else
+    echo -e "${RED}❌ $name is not available at $url (HTTP ${code})${NC}"
+    return 1
+  fi
+}
+
 # Detect OS and architecture
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m)
@@ -68,29 +107,42 @@ fi
 
 # Create directories
 echo -e "${BLUE}📁 Creating directories...${NC}"
-sudo mkdir -p /home/portico/{apps,reverse-proxy,static,logs}
+sudo mkdir -p /home/portico/{apps,reverse-proxy,static,logs,templates}
 sudo chown -R portico:portico /home/portico
+
+# Create Docker network
+echo -e "${BLUE}🐳 Creating Docker network...${NC}"
+if ! docker network ls | grep -q portico-network; then
+    docker network create portico-network
+    echo -e "${GREEN}✅ Created portico-network${NC}"
+else
+    echo -e "${GREEN}✅ portico-network already exists${NC}"
+fi
 
 # Configure group permissions for multi-user access
 echo -e "${BLUE}👥 Configuring group permissions...${NC}"
 
-# Ask if user wants to be added to portico group
-if ! groups $USER | grep -q '\bportico\b'; then
-    echo -e "${YELLOW}❓ Do you want to add user '$USER' to the 'portico' group?${NC}"
-    echo -e "${YELLOW}   This will allow you to access Portico files without sudo.${NC}"
-    echo -e "${YELLOW}   (y/N): ${NC}"
-    read -r response
-    if [[ "$response" =~ ^[Yy]$ ]]; then
-        echo -e "${BLUE}➕ Adding $USER to portico group...${NC}"
-        sudo usermod -aG portico $USER
-        echo -e "${GREEN}✅ User $USER has been added to the portico group${NC}"
-        echo -e "${YELLOW}⚠️  Note: You may need to log out and log back in for group changes to take effect${NC}"
+# Ask if user wants to be added to portico group (skip for root)
+if [[ "$USER" != "root" ]]; then
+    if ! groups $USER | grep -q '\bportico\b'; then
+        echo -e "${YELLOW}❓ Do you want to add user '$USER' to the 'portico' group?${NC}"
+        echo -e "${YELLOW}   This will allow you to access Portico files without sudo.${NC}"
+        echo -e "${YELLOW}   (y/N): ${NC}"
+        read -r response
+        if [[ "$response" =~ ^[Yy]$ ]]; then
+            echo -e "${BLUE}➕ Adding $USER to portico group...${NC}"
+            sudo usermod -aG portico $USER
+            echo -e "${GREEN}✅ User $USER has been added to the portico group${NC}"
+            echo -e "${YELLOW}⚠️  Note: You may need to log out and log back in for group changes to take effect${NC}"
+        else
+            echo -e "${BLUE}ℹ️  Skipping group addition. You can add yourself later with:${NC}"
+            echo -e "${BLUE}   sudo usermod -aG portico $USER${NC}"
+        fi
     else
-        echo -e "${BLUE}ℹ️  Skipping group addition. You can add yourself later with:${NC}"
-        echo -e "${BLUE}   sudo usermod -aG portico $USER${NC}"
+        echo -e "${GREEN}✅ User $USER is already in the portico group${NC}"
     fi
 else
-    echo -e "${GREEN}✅ User $USER is already in the portico group${NC}"
+    echo -e "${BLUE}ℹ️  Running as root - skipping group addition (root already has full access)${NC}"
 fi
 
 # Set group permissions on portico directories
@@ -99,55 +151,54 @@ sudo chmod -R g+rwX /home/portico
 sudo chmod g+s /home/portico/apps  # Set setgid bit so new files inherit group
 sudo chmod g+s /home/portico/reverse-proxy  # Set setgid bit so new files inherit group
 
-# Safer URL check: follow redirects, tolerate HEAD-not-allowed, and read final code.
-check_url() {
-  local url="$1"
-  local name="$2"
+# Download templates
+echo -e "${BLUE}📄 Downloading templates...${NC}"
 
-  # Try HEAD following redirects; if HEAD unsupported, do a minimal GET (range 0-0)
-  local code
-  code=$(curl -sS -I -L -o /dev/null -w '%{http_code}' --connect-timeout 10 --max-time 30 "$url") || code=0
-  if [ "$code" -eq 405 ] || [ "$code" -eq 0 ]; then
-    code=$(curl -sS -L -o /dev/null -r 0-0 -w '%{http_code}' --connect-timeout 10 --max-time 30 "$url") || code=0
-  fi
+# Download caddy-app.tmpl
+CADDY_APP_TEMPLATE_URL="https://raw.githubusercontent.com/maxvegac/portico/main/templates/caddy-app.tmpl"
+if download_file "$CADDY_APP_TEMPLATE_URL" "/tmp/caddy-app.tmpl" "Caddy app template"; then
+    sudo mv /tmp/caddy-app.tmpl /home/portico/templates/caddy-app.tmpl
+    sudo chown portico:portico /home/portico/templates/caddy-app.tmpl
+else
+    echo -e "${YELLOW}⚠️  Warning: Could not download caddy-app.tmpl${NC}"
+fi
 
-  # For availability checks, require a final 200 on GET/ranged GET
-  if [ "$code" -eq 200 ]; then
-    echo -e "${GREEN}✅ $name is available${NC}"
-    return 0
-  else
-    echo -e "${RED}❌ $name is not available at $url (HTTP ${code})${NC}"
-    return 1
-  fi
-}
+# Download app.yml.tmpl
+APP_YML_TEMPLATE_URL="https://raw.githubusercontent.com/maxvegac/portico/main/templates/app.yml.tmpl"
+if download_file "$APP_YML_TEMPLATE_URL" "/tmp/app.yml.tmpl" "App YAML template"; then
+    sudo mv /tmp/app.yml.tmpl /home/portico/templates/app.yml.tmpl
+    sudo chown portico:portico /home/portico/templates/app.yml.tmpl
+else
+    echo -e "${YELLOW}⚠️  Warning: Could not download app.yml.tmpl${NC}"
+fi
 
-download_file() {
-  local url="$1"
-  local output="$2"
-  local name="$3"
+# Download docker-compose.tmpl
+DOCKER_COMPOSE_TEMPLATE_URL="https://raw.githubusercontent.com/maxvegac/portico/main/templates/docker-compose.tmpl"
+if download_file "$DOCKER_COMPOSE_TEMPLATE_URL" "/tmp/docker-compose.tmpl" "Docker Compose template"; then
+    sudo mv /tmp/docker-compose.tmpl /home/portico/templates/docker-compose.tmpl
+    sudo chown portico:portico /home/portico/templates/docker-compose.tmpl
+else
+    echo -e "${YELLOW}⚠️  Warning: Could not download docker-compose.tmpl${NC}"
+fi
 
-  # Follow redirects and fail on 4xx/5xx
-  if curl -sS -L --fail-with-body --connect-timeout 15 --max-time 0 -o "$output" "$url"; then
-    echo -e "${GREEN}✅ Downloaded $name${NC}"
-    return 0
-  else
-    local ec=$?
-    echo -e "${RED}❌ Failed to download $name (curl exit $ec)${NC}"
-    # For debugging, uncomment:
-    # curl -I -L "$url"
-    return 1
-  fi
-}
 
 # Verify all required files are available
 echo -e "${BLUE}🔍 Verifying all required files are available...${NC}"
 
-# Check for releases
+# Check for releases (including pre-releases)
 LATEST_RELEASE=$(curl -s https://api.github.com/repos/maxvegac/portico/releases/latest | grep "tag_name" | cut -d '"' -f 4)
 if [[ -z "$LATEST_RELEASE" ]]; then
-    echo -e "${RED}❌ No releases found${NC}"
-    echo -e "${YELLOW}💡 Please check: https://github.com/maxvegac/portico/releases${NC}"
-    exit 1
+    # Try to get any release (including pre-releases)
+    LATEST_RELEASE=$(curl -s https://api.github.com/repos/maxvegac/portico/releases | grep "tag_name" | head -1 | cut -d '"' -f 4)
+    if [[ -z "$LATEST_RELEASE" ]]; then
+        echo -e "${YELLOW}⚠️  No releases found, will build from source${NC}"
+        echo -e "${YELLOW}💡 You can check releases at: https://github.com/maxvegac/portico/releases${NC}"
+        LATEST_RELEASE="v1.0.0"  # Fallback version
+    else
+        echo -e "${GREEN}✅ Found release: $LATEST_RELEASE${NC}"
+    fi
+else
+    echo -e "${GREEN}✅ Found latest release: $LATEST_RELEASE${NC}"
 fi
 
 # Check binary availability
@@ -155,24 +206,27 @@ BINARY_NAME="portico-$OS-$ARCH"
 BINARY_URL="https://github.com/maxvegac/portico/releases/download/$LATEST_RELEASE/$BINARY_NAME"
 DEV_LATEST_URL="https://github.com/maxvegac/portico/releases/download/dev-latest/portico-dev-latest-$OS-$ARCH"
 
+BINARY_AVAILABLE=false
 if [[ "$DEV_MODE" == "true" ]]; then
     # In dev mode, prefer dev-latest
-    if ! check_url "$DEV_LATEST_URL" "Portico dev-latest binary"; then
-        if ! check_url "$BINARY_URL" "Portico $LATEST_RELEASE binary"; then
-            echo -e "${RED}❌ No binaries available for download${NC}"
-            echo -e "${YELLOW}💡 Please check: https://github.com/maxvegac/portico/releases${NC}"
-            exit 1
-        fi
+    if check_url "$DEV_LATEST_URL" "Portico dev-latest binary"; then
+        BINARY_AVAILABLE=true
+    elif check_url "$BINARY_URL" "Portico $LATEST_RELEASE binary"; then
+        BINARY_AVAILABLE=true
     fi
 else
     # In stable mode, prefer stable release
-    if ! check_url "$BINARY_URL" "Portico $LATEST_RELEASE binary"; then
-        if ! check_url "$DEV_LATEST_URL" "Portico dev-latest binary"; then
-            echo -e "${RED}❌ No binaries available for download${NC}"
-            echo -e "${YELLOW}💡 Please check: https://github.com/maxvegac/portico/releases${NC}"
-            exit 1
-        fi
+    if check_url "$BINARY_URL" "Portico $LATEST_RELEASE binary"; then
+        BINARY_AVAILABLE=true
+    elif check_url "$DEV_LATEST_URL" "Portico dev-latest binary"; then
+        BINARY_AVAILABLE=true
     fi
+fi
+
+if [[ "$BINARY_AVAILABLE" == "false" ]]; then
+    echo -e "${YELLOW}⚠️  No binaries available for download${NC}"
+    echo -e "${YELLOW}💡 Will build from source instead${NC}"
+    echo -e "${YELLOW}💡 You can check releases at: https://github.com/maxvegac/portico/releases${NC}"
 fi
 
 # Check static files availability
@@ -195,51 +249,98 @@ done
 
 echo -e "${GREEN}✅ All required files are available${NC}"
 
-# Download Portico CLI binary
-echo -e "${BLUE}📦 Downloading Portico CLI...${NC}"
+# Download or build Portico CLI binary
+echo -e "${BLUE}📦 Setting up Portico CLI...${NC}"
 
-if [[ "$DEV_MODE" == "true" ]]; then
-    # In dev mode, prefer dev-latest
-    if check_url "$DEV_LATEST_URL" "Portico dev-latest binary"; then
-        echo -e "${BLUE}📦 Downloading Portico dev-latest...${NC}"
-        if download_file "$DEV_LATEST_URL" "/tmp/portico" "Portico dev-latest"; then
-            sudo mv /tmp/portico /usr/local/bin/portico
-            sudo chmod +x /usr/local/bin/portico
-        else
-            exit 1
-        fi
-    elif check_url "$BINARY_URL" "Portico $LATEST_RELEASE binary"; then
-        echo -e "${BLUE}📦 Downloading Portico $LATEST_RELEASE...${NC}"
-        if download_file "$BINARY_URL" "/tmp/portico" "Portico $LATEST_RELEASE"; then
-            sudo mv /tmp/portico /usr/local/bin/portico
-            sudo chmod +x /usr/local/bin/portico
-        else
-            exit 1
+if [[ "$BINARY_AVAILABLE" == "true" ]]; then
+    # Download binary
+    if [[ "$DEV_MODE" == "true" ]]; then
+        # In dev mode, prefer dev-latest
+        if check_url "$DEV_LATEST_URL" "Portico dev-latest binary"; then
+            echo -e "${BLUE}📦 Downloading Portico dev-latest...${NC}"
+            if download_file "$DEV_LATEST_URL" "/tmp/portico" "Portico dev-latest"; then
+                sudo mv /tmp/portico /usr/local/bin/portico
+                sudo chmod +x /usr/local/bin/portico
+            else
+                echo -e "${YELLOW}⚠️  Download failed, will build from source${NC}"
+                BINARY_AVAILABLE=false
+            fi
+        elif check_url "$BINARY_URL" "Portico $LATEST_RELEASE binary"; then
+            echo -e "${BLUE}📦 Downloading Portico $LATEST_RELEASE...${NC}"
+            if download_file "$BINARY_URL" "/tmp/portico" "Portico $LATEST_RELEASE"; then
+                sudo mv /tmp/portico /usr/local/bin/portico
+                sudo chmod +x /usr/local/bin/portico
+            else
+                echo -e "${YELLOW}⚠️  Download failed, will build from source${NC}"
+                BINARY_AVAILABLE=false
+            fi
         fi
     else
-        echo -e "${RED}❌ No binaries available for download${NC}"
-        exit 1
+        # In stable mode, prefer stable release
+        if check_url "$BINARY_URL" "Portico $LATEST_RELEASE binary"; then
+            echo -e "${BLUE}📦 Downloading Portico $LATEST_RELEASE...${NC}"
+            if download_file "$BINARY_URL" "/tmp/portico" "Portico $LATEST_RELEASE"; then
+                sudo mv /tmp/portico /usr/local/bin/portico
+                sudo chmod +x /usr/local/bin/portico
+            else
+                echo -e "${YELLOW}⚠️  Download failed, will build from source${NC}"
+                BINARY_AVAILABLE=false
+            fi
+        elif check_url "$DEV_LATEST_URL" "Portico dev-latest binary"; then
+            echo -e "${BLUE}📦 Downloading Portico dev-latest...${NC}"
+            if download_file "$DEV_LATEST_URL" "/tmp/portico" "Portico dev-latest"; then
+                sudo mv /tmp/portico /usr/local/bin/portico
+                sudo chmod +x /usr/local/bin/portico
+            else
+                echo -e "${YELLOW}⚠️  Download failed, will build from source${NC}"
+                BINARY_AVAILABLE=false
+            fi
+        fi
     fi
-else
-    # In stable mode, prefer stable release
-    if check_url "$BINARY_URL" "Portico $LATEST_RELEASE binary"; then
-        echo -e "${BLUE}📦 Downloading Portico $LATEST_RELEASE...${NC}"
-        if download_file "$BINARY_URL" "/tmp/portico" "Portico $LATEST_RELEASE"; then
-            sudo mv /tmp/portico /usr/local/bin/portico
-            sudo chmod +x /usr/local/bin/portico
+fi
+
+if [[ "$BINARY_AVAILABLE" == "false" ]]; then
+    # Build from source
+    echo -e "${BLUE}🔨 Building Portico from source...${NC}"
+    
+    # Check if Go is installed
+    if ! command -v go &> /dev/null; then
+        echo -e "${BLUE}📦 Installing Go...${NC}"
+        # Install Go (Ubuntu/Debian)
+        if command -v apt-get &> /dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y golang-go
+        # Install Go (CentOS/RHEL)
+        elif command -v yum &> /dev/null; then
+            sudo yum install -y golang
+        # Install Go (macOS)
+        elif command -v brew &> /dev/null; then
+            brew install go
         else
+            echo -e "${RED}❌ Go is not installed and package manager not found${NC}"
+            echo -e "${YELLOW}💡 Please install Go manually: https://golang.org/doc/install${NC}"
             exit 1
         fi
-    elif check_url "$DEV_LATEST_URL" "Portico dev-latest binary"; then
-        echo -e "${BLUE}📦 Downloading Portico dev-latest...${NC}"
-        if download_file "$DEV_LATEST_URL" "/tmp/portico" "Portico dev-latest"; then
-            sudo mv /tmp/portico /usr/local/bin/portico
-            sudo chmod +x /usr/local/bin/portico
-        else
-            exit 1
-        fi
+    fi
+    
+    # Clone repository and build
+    echo -e "${BLUE}📥 Cloning Portico repository...${NC}"
+    cd /tmp
+    if [[ -d "portico" ]]; then
+        rm -rf portico
+    fi
+    git clone https://github.com/maxvegac/portico.git
+    cd portico
+    
+    echo -e "${BLUE}🔨 Building Portico...${NC}"
+    go build -o portico ./src/cmd/portico
+    
+    if [[ -f "portico" ]]; then
+        sudo mv portico /usr/local/bin/portico
+        sudo chmod +x /usr/local/bin/portico
+        echo -e "${GREEN}✅ Portico built and installed successfully${NC}"
     else
-        echo -e "${RED}❌ No binaries available for download${NC}"
+        echo -e "${RED}❌ Failed to build Portico${NC}"
         exit 1
     fi
 fi
@@ -260,15 +361,11 @@ fi
 # Create initial Caddyfile
 echo -e "${BLUE}⚙️  Setting up Caddyfile...${NC}"
 
-# Download the Caddyfile from the repository
-CADDYFILE_URL="https://raw.githubusercontent.com/maxvegac/portico/main/static/Caddyfile"
-if download_file "$CADDYFILE_URL" "/tmp/Caddyfile" "Caddyfile"; then
-    sudo mkdir -p /home/portico/reverse-proxy
-    sudo mv /tmp/Caddyfile /home/portico/reverse-proxy/Caddyfile
-    sudo chown portico:portico /home/portico/reverse-proxy/Caddyfile
-else
-    exit 1
-fi
+# Create reverse-proxy directory
+sudo mkdir -p /home/portico/reverse-proxy
+sudo chown portico:portico /home/portico/reverse-proxy
+
+# Note: Caddyfile will be generated dynamically from templates when needed
 
 # Create portico config
 echo -e "${BLUE}📋 Setting up Portico configuration...${NC}"

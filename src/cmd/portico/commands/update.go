@@ -152,54 +152,73 @@ func (um *UpdateManager) GetCurrentVersion() (string, error) {
 
 // DownloadRelease downloads the latest release binary
 func (um *UpdateManager) DownloadRelease(release *Release) error {
-	// Find the appropriate asset for the current platform
-	assetName := um.getAssetName()
-	var targetAsset *Asset
-
-	for i, asset := range release.Assets {
-		if strings.Contains(asset.Name, assetName) {
-			targetAsset = &release.Assets[i]
-			break
-		}
-	}
-
-	if targetAsset == nil {
-		return fmt.Errorf("no suitable binary found for %s", runtime.GOOS+"-"+runtime.GOARCH)
+	targetAsset, err := um.findTargetAsset(release)
+	if err != nil {
+		return err
 	}
 
 	fmt.Printf("Downloading %s...\n", targetAsset.Name)
 
-	// Download the binary
-	client := &http.Client{Timeout: 30 * time.Second}
-	req, err := http.NewRequestWithContext(context.Background(), "GET", targetAsset.BrowserDownloadURL, http.NoBody)
+	tmpFile, err := um.downloadBinary(targetAsset)
 	if err != nil {
-		return fmt.Errorf("error creating request: %w", err)
+		return err
 	}
+	defer os.Remove(tmpFile.Name())
+
+	return um.installBinary(tmpFile.Name())
+}
+
+// findTargetAsset finds the appropriate asset for the current platform
+func (um *UpdateManager) findTargetAsset(release *Release) (*Asset, error) {
+	assetName := um.getAssetName()
+
+	for i, asset := range release.Assets {
+		if strings.Contains(asset.Name, assetName) {
+			return &release.Assets[i], nil
+		}
+	}
+
+	return nil, fmt.Errorf("no suitable binary found for %s", runtime.GOOS+"-"+runtime.GOARCH)
+}
+
+// downloadBinary downloads the binary to a temporary file
+func (um *UpdateManager) downloadBinary(asset *Asset) (*os.File, error) {
+	client := &http.Client{Timeout: 30 * time.Second}
+	req, err := http.NewRequestWithContext(context.Background(), "GET", asset.BrowserDownloadURL, http.NoBody)
+	if err != nil {
+		return nil, fmt.Errorf("error creating request: %w", err)
+	}
+
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("error downloading binary: %w", err)
+		return nil, fmt.Errorf("error downloading binary: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("download failed with status %d", resp.StatusCode)
+		return nil, fmt.Errorf("download failed with status %d", resp.StatusCode)
 	}
 
 	// Create temporary file
 	tmpFile, err := os.CreateTemp("", "portico-update-*")
 	if err != nil {
-		return fmt.Errorf("error creating temp file: %w", err)
+		return nil, fmt.Errorf("error creating temp file: %w", err)
 	}
-	defer os.Remove(tmpFile.Name())
 
 	// Copy downloaded content to temp file
 	_, err = io.Copy(tmpFile, resp.Body)
 	if err != nil {
 		tmpFile.Close()
-		return fmt.Errorf("error writing to temp file: %w", err)
+		os.Remove(tmpFile.Name())
+		return nil, fmt.Errorf("error writing to temp file: %w", err)
 	}
 	tmpFile.Close()
 
+	return tmpFile, nil
+}
+
+// installBinary installs the downloaded binary
+func (um *UpdateManager) installBinary(tmpFilePath string) error {
 	// Get current executable path
 	currentPath, err := os.Executable()
 	if err != nil {
@@ -207,42 +226,45 @@ func (um *UpdateManager) DownloadRelease(release *Release) error {
 	}
 
 	// Make temp file executable
-	if err := os.Chmod(tmpFile.Name(), 0o755); err != nil {
+	if err := os.Chmod(tmpFilePath, 0o755); err != nil {
 		return fmt.Errorf("error making temp file executable: %w", err)
 	}
 
-	// Replace current binary
-	if err := copyFile(tmpFile.Name(), currentPath); err != nil {
+	// Replace current binary using atomic update strategy
+	if err := atomicReplaceBinary(tmpFilePath, currentPath); err != nil {
 		return fmt.Errorf("error replacing binary: %w", err)
 	}
 
 	return nil
 }
 
-// copyFile copies a file from src to dst, handling cross-device issues and permissions
-func copyFile(src, dst string) error {
-	// Open source file
-	srcFile, err := os.Open(src)
-	if err != nil {
-		return fmt.Errorf("error opening source file: %w", err)
-	}
-	defer srcFile.Close()
+// atomicReplaceBinary replaces the currently running executable atomically
+func atomicReplaceBinary(newBinary, currentBinary string) error {
+	// Get directory and filename of current binary
+	currentDir := filepath.Dir(currentBinary)
+	currentName := filepath.Base(currentBinary)
 
-	// Get source file info
-	srcInfo, err := srcFile.Stat()
-	if err != nil {
-		return fmt.Errorf("error getting source file info: %w", err)
-	}
+	// Create a new name for the current binary (add .old suffix)
+	oldBinary := filepath.Join(currentDir, currentName+".old")
 
-	// Check if destination requires sudo
-	needsSudo := needsElevatedPermissions(dst)
-
-	if needsSudo {
-		return copyFileWithSudo(src, dst, srcInfo.Mode())
+	// Step 1: Move current binary to .old (this works because we're not deleting it)
+	if err := os.Rename(currentBinary, oldBinary); err != nil {
+		return fmt.Errorf("error moving current binary to .old: %w", err)
 	}
 
-	// Use atomic update to avoid "text file busy" error
-	return atomicCopy(src, dst, srcInfo.Mode())
+	// Step 2: Move new binary to the original location
+	if err := os.Rename(newBinary, currentBinary); err != nil {
+		// If this fails, try to restore the original binary
+		if restoreErr := os.Rename(oldBinary, currentBinary); restoreErr != nil {
+			return fmt.Errorf("error moving new binary to final location: %w (restore also failed: %v)", err, restoreErr)
+		}
+		return fmt.Errorf("error moving new binary to final location: %w", err)
+	}
+
+	// Step 3: Clean up the old binary (optional, can be left for manual cleanup)
+	// os.Remove(oldBinary)
+
+	return nil
 }
 
 // atomicCopy performs an atomic file copy to avoid "text file busy" errors
@@ -250,7 +272,7 @@ func atomicCopy(src, dst string, mode os.FileMode) error {
 	// Create a temporary file in the same directory as destination
 	dstDir := filepath.Dir(dst)
 	tmpFile := filepath.Join(dstDir, ".portico-update-tmp-"+filepath.Base(dst))
-	
+
 	// Open source file
 	srcFile, err := os.Open(src)
 	if err != nil {
@@ -283,150 +305,6 @@ func atomicCopy(src, dst string, mode os.FileMode) error {
 	if err := os.Rename(tmpFile, dst); err != nil {
 		os.Remove(tmpFile) // Clean up on error
 		return fmt.Errorf("error replacing destination file: %w", err)
-	}
-
-	return nil
-}
-
-// needsElevatedPermissions checks if the destination path requires elevated permissions
-func needsElevatedPermissions(path string) bool {
-	// Check if the directory is writable by current user
-	dir := filepath.Dir(path)
-	if info, err := os.Stat(dir); err == nil {
-		// Check if directory is writable
-		if info.Mode()&0o200 == 0 {
-			return true
-		}
-	}
-
-	// Check common system directories that require sudo
-	systemDirs := []string{
-		"/usr/local/bin",
-		"/usr/bin",
-		"/bin",
-		"/sbin",
-		"/usr/sbin",
-	}
-
-	for _, sysDir := range systemDirs {
-		if strings.HasPrefix(path, sysDir) {
-			return true
-		}
-	}
-
-	return false
-}
-
-// copyFileWithSudo copies a file using sudo when elevated permissions are needed
-func copyFileWithSudo(src, dst string, mode os.FileMode) error {
-	// First, copy to a temporary location that doesn't require sudo
-	tmpDir := os.TempDir()
-	tmpDst := filepath.Join(tmpDir, "portico-update-tmp")
-
-	// Copy to temp location first
-	if err := copyFileDirect(src, tmpDst, mode); err != nil {
-		return fmt.Errorf("error copying to temp location: %w", err)
-	}
-	defer os.Remove(tmpDst) // Clean up temp file
-
-	// Use sudo to copy from temp to final destination
-	if err := copyFileWithSudoCmd(tmpDst, dst); err != nil {
-		return fmt.Errorf("error copying with sudo: %w", err)
-	}
-
-	// Set permissions with sudo
-	if err := setFilePermissions(dst, mode); err != nil {
-		return fmt.Errorf("error setting permissions with sudo: %w", err)
-	}
-
-	return nil
-}
-
-// setFilePermissions safely sets file permissions using sudo
-func setFilePermissions(filePath string, mode os.FileMode) error {
-	// Validate file path to prevent path traversal
-	if !filepath.IsAbs(filePath) {
-		filePath, _ = filepath.Abs(filePath)
-	}
-	
-	// Validate that the path is safe (no dangerous characters)
-	if strings.Contains(filePath, "..") || strings.Contains(filePath, "~") {
-		return fmt.Errorf("unsafe file path: %s", filePath)
-	}
-	
-	// Convert mode to octal string safely
-	permStr := fmt.Sprintf("%o", mode)
-	
-	// Validate that the permission string is safe (only digits 0-7)
-	for _, char := range permStr {
-		if char < '0' || char > '7' {
-			return fmt.Errorf("invalid permission mode: %s", permStr)
-		}
-	}
-	
-	// Use exec.Command with validated arguments
-	cmd := exec.Command("sudo", "chmod", permStr, filePath)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("sudo chmod failed: %w, output: %s", err, string(output))
-	}
-	
-	return nil
-}
-
-// copyFileWithSudoCmd safely copies a file using sudo
-func copyFileWithSudoCmd(src, dst string) error {
-	// Validate source path
-	if !filepath.IsAbs(src) {
-		src, _ = filepath.Abs(src)
-	}
-	
-	// Validate destination path
-	if !filepath.IsAbs(dst) {
-		dst, _ = filepath.Abs(dst)
-	}
-	
-	// Validate that paths are safe (no dangerous characters)
-	if strings.Contains(src, "..") || strings.Contains(src, "~") ||
-		strings.Contains(dst, "..") || strings.Contains(dst, "~") {
-		return fmt.Errorf("unsafe file path: src=%s, dst=%s", src, dst)
-	}
-	
-	// Use exec.Command with validated arguments
-	cmd := exec.Command("sudo", "cp", src, dst)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("sudo cp failed: %w, output: %s", err, string(output))
-	}
-	
-	return nil
-}
-
-// copyFileDirect copies a file directly without permission checks
-func copyFileDirect(src, dst string, mode os.FileMode) error {
-	// Open source file
-	srcFile, err := os.Open(src)
-	if err != nil {
-		return fmt.Errorf("error opening source file: %w", err)
-	}
-	defer srcFile.Close()
-
-	// Create destination file
-	dstFile, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode)
-	if err != nil {
-		return fmt.Errorf("error creating destination file: %w", err)
-	}
-	defer dstFile.Close()
-
-	// Copy file contents
-	_, err = io.Copy(dstFile, srcFile)
-	if err != nil {
-		return fmt.Errorf("error copying file contents: %w", err)
-	}
-
-	// Ensure destination file is written to disk
-	if err := dstFile.Sync(); err != nil {
-		return fmt.Errorf("error syncing destination file: %w", err)
 	}
 
 	return nil
@@ -503,12 +381,6 @@ func runUpdateCommand(cmd *cobra.Command) {
 
 	// Ask for confirmation
 	fmt.Printf("Update available: %s -> %s\n", currentVersion, latestRelease.TagName)
-
-	// Check if sudo will be needed
-	currentPath, err := os.Executable()
-	if err == nil && needsElevatedPermissions(currentPath) {
-		fmt.Println("⚠️  This update will require sudo privileges")
-	}
 
 	fmt.Print("Do you want to update? (y/N): ")
 

@@ -30,7 +30,7 @@ func NewAppsDeployCmd() *cobra.Command {
 			}
 
 			// Create app manager
-			appManager := app.NewManager(config.AppsDir)
+			appManager := app.NewManager(config.AppsDir, config.TemplatesDir)
 
 			// Load app configuration
 			appConfig, err := appManager.LoadApp(appName)
@@ -71,7 +71,7 @@ func NewAppsDeployCmd() *cobra.Command {
 			}
 
 			// Update Caddyfile
-			proxyManager := proxy.NewCaddyManager(config.ProxyDir)
+			proxyManager := proxy.NewCaddyManager(config.ProxyDir, config.TemplatesDir)
 			if err := proxyManager.UpdateCaddyfile(config.AppsDir); err != nil {
 				fmt.Printf("Error updating Caddyfile: %v\n", err)
 				return

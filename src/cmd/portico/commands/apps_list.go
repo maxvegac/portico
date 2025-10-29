@@ -16,14 +16,20 @@ func NewAppsListCmd() *cobra.Command {
 		Short: "List all applications",
 		Run: func(_ *cobra.Command, _ []string) {
 			// Load config
-			config, err := config.LoadConfig()
+			cfg, err := config.LoadConfig()
 			if err != nil {
 				fmt.Printf("Error loading config: %v\n", err)
 				return
 			}
 
+			// Validate apps directory
+			if cfg.AppsDir == "" {
+				fmt.Printf("Error: apps directory not configured\n")
+				return
+			}
+
 			// Create app manager
-			appManager := app.NewManager(config.AppsDir)
+			appManager := app.NewManager(cfg.AppsDir, cfg.TemplatesDir)
 
 			// List all applications
 			apps, err := appManager.ListApps()

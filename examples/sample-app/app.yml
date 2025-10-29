@@ -10,7 +10,7 @@ services:
     port: 80
     volumes:
       - ./html:/srv
-      - ./caddy.conf:/etc/caddy/Caddyfile
+      - ./Caddyfile:/etc/caddy/Caddyfile
     command: ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
   - name: api
     image: node:18-alpine

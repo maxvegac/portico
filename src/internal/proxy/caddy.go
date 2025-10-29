@@ -4,22 +4,23 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"text/template"
 )
 
 // CaddyManager handles Caddy proxy configuration
 type CaddyManager struct {
-	ConfigDir string
+	ConfigDir    string
+	TemplatesDir string
 }
 
 // NewCaddyManager creates a new CaddyManager
-func NewCaddyManager(configDir string) *CaddyManager {
+func NewCaddyManager(configDir, templatesDir string) *CaddyManager {
 	return &CaddyManager{
-		ConfigDir: configDir,
+		ConfigDir:    configDir,
+		TemplatesDir: templatesDir,
 	}
 }
 
-// UpdateCaddyfile updates the Caddyfile with current applications
+// UpdateCaddyfile copies the static Caddyfile to the proxy directory
 func (cm *CaddyManager) UpdateCaddyfile(appsDir string) error {
 	caddyfilePath := filepath.Join(cm.ConfigDir, "Caddyfile")
 
@@ -28,61 +29,23 @@ func (cm *CaddyManager) UpdateCaddyfile(appsDir string) error {
 		return fmt.Errorf("error creating proxy directory: %w", err)
 	}
 
-	// Get all app directories
-	entries, err := os.ReadDir(appsDir)
+	// Copy static Caddyfile (which includes import /home/portico/apps/*/Caddyfile)
+	staticCaddyfilePath := filepath.Join(cm.TemplatesDir, "..", "static", "Caddyfile")
+	
+	// Read static Caddyfile
+	content, err := os.ReadFile(staticCaddyfilePath)
 	if err != nil {
-		return fmt.Errorf("error reading apps directory: %w", err)
+		return fmt.Errorf("error reading static Caddyfile: %w", err)
 	}
 
-	var apps []AppConfig
-	for _, entry := range entries {
-		if entry.IsDir() {
-			appName := entry.Name()
-			caddyConfPath := filepath.Join(appsDir, appName, "caddy.conf")
-
-			// Check if caddy.conf exists
-			if _, statErr := os.Stat(caddyConfPath); statErr == nil {
-				apps = append(apps, AppConfig{
-					Name:          appName,
-					CaddyConfPath: caddyConfPath,
-				})
-			}
-		}
-	}
-
-	// Load template
-	templatePath := "templates/caddyfile.tmpl"
-	t, err := template.ParseFiles(templatePath)
-	if err != nil {
-		return fmt.Errorf("error parsing caddyfile template: %w", err)
-	}
-
-	// Create output file
-	file, err := os.Create(caddyfilePath)
-	if err != nil {
-		return fmt.Errorf("error creating caddyfile: %w", err)
-	}
-	defer file.Close()
-
-	// Execute template
-	if err := t.Execute(file, struct {
-		Apps []AppConfig
-	}{
-		Apps: apps,
-	}); err != nil {
-		return fmt.Errorf("error executing caddyfile template: %w", err)
+	// Write to proxy directory
+	if err := os.WriteFile(caddyfilePath, content, 0o644); err != nil {
+		return fmt.Errorf("error writing Caddyfile: %w", err)
 	}
 
 	return nil
 }
 
-// AppConfig represents application configuration for Caddy
-type AppConfig struct {
-	Name          string
-	Domain        string
-	Port          int
-	CaddyConfPath string
-}
 
 // ReloadCaddy reloads the Caddy configuration
 func (cm *CaddyManager) ReloadCaddy() error {

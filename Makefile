@@ -52,9 +52,9 @@ run: build
 
 # Setup development environment
 setup:
-	mkdir -p /home/portico/{apps,reverse-proxy,static}
+	mkdir -p /home/portico/{apps,reverse-proxy,static,templates}
 	cp static/index.html /home/portico/static/
-	cp static/Caddyfile /home/portico/reverse-proxy/
+	cp templates/*.tmpl /home/portico/templates/
 	cp static/config.yml /home/portico/
 	cp static/docker-compose.yml /home/portico/reverse-proxy/
 	chown -R portico:portico /home/portico

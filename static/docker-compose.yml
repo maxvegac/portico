@@ -11,7 +11,13 @@ services:
       - /home/portico/static:/home/portico/static
       - caddy_data:/data
       - caddy_config:/config
+    networks:
+      - portico-network
     restart: unless-stopped
+
+networks:
+  portico-network:
+    external: true
 
 volumes:
   caddy_data:

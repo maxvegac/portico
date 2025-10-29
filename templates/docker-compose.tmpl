@@ -20,6 +20,8 @@ services:
 {{range .Secrets}}
       - {{.}}
 {{end}}
+    networks:
+      - portico-network
 {{if .DependsOn}}
     depends_on:
 {{range .DependsOn}}
@@ -27,6 +29,10 @@ services:
 {{end}}
 {{end}}
 {{end}}
+
+networks:
+  portico-network:
+    external: true
 
 secrets:
 {{range .Secrets}}

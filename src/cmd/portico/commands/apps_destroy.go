@@ -31,7 +31,7 @@ func NewAppsDestroyCmd() *cobra.Command {
 			}
 
 			// Create app manager
-			appManager := app.NewManager(config.AppsDir)
+			appManager := app.NewManager(config.AppsDir, config.TemplatesDir)
 
 			// Check if app exists
 			appDir := filepath.Join(config.AppsDir, appName)
@@ -62,7 +62,7 @@ func NewAppsDestroyCmd() *cobra.Command {
 			}
 
 			// Update Caddyfile
-			proxyManager := proxy.NewCaddyManager(config.ProxyDir)
+			proxyManager := proxy.NewCaddyManager(config.ProxyDir, config.TemplatesDir)
 			if err := proxyManager.UpdateCaddyfile(config.AppsDir); err != nil {
 				fmt.Printf("Warning: Error updating Caddyfile: %v\n", err)
 			}

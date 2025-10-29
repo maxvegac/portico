@@ -22,7 +22,7 @@ Portico is a Platform as a Service (PaaS) similar to Dokku, but with the followi
 │   └── your-app/
 │       ├── app.yml
 │       ├── docker-compose.yml      # Application services
-│       ├── caddy.conf
+│       ├── Caddyfile
 │       └── env/                    # Secrets directory
 │           ├── database_password
 │           ├── api_key
@@ -38,7 +38,6 @@ Portico uses template files for generating configurations:
 
 ```
 templates/
-├── caddyfile.tmpl          # Main Caddyfile template
 ├── caddy-app.tmpl          # Individual app Caddy config
 ├── docker-compose.tmpl     # Docker Compose template
 └── app.yml.tmpl            # App configuration template
@@ -98,7 +97,7 @@ portico version
 Each application has:
 - `app.yml` - Application configuration
 - `docker-compose.yml` - Service definitions
-- `caddy.conf` - Caddy configuration
+- `Caddyfile` - Caddy configuration
 - `env/` - Secret files
 
 ## Author
