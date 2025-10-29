@@ -365,7 +365,14 @@ echo -e "${BLUE}⚙️  Setting up Caddyfile...${NC}"
 sudo mkdir -p /home/portico/reverse-proxy
 sudo chown portico:portico /home/portico/reverse-proxy
 
-# Note: Caddyfile will be generated dynamically from templates when needed
+# Copy the static Caddyfile to reverse-proxy directory
+if [[ -f "/home/portico/static/Caddyfile" ]]; then
+    sudo cp /home/portico/static/Caddyfile /home/portico/reverse-proxy/Caddyfile
+    sudo chown portico:portico /home/portico/reverse-proxy/Caddyfile
+    echo -e "${GREEN}✅ Caddyfile copied to reverse-proxy directory${NC}"
+else
+    echo -e "${YELLOW}⚠️  Warning: static/Caddyfile not found, will be created when needed${NC}"
+fi
 
 # Create portico config
 echo -e "${BLUE}📋 Setting up Portico configuration...${NC}"
