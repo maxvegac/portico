@@ -229,12 +229,21 @@ if [[ "$BINARY_AVAILABLE" == "false" ]]; then
     echo -e "${YELLOW}💡 You can check releases at: https://github.com/maxvegac/portico/releases${NC}"
 fi
 
+# Define Caddyfile URL once to reuse in checks and download
+CADDYFILE_URL="https://raw.githubusercontent.com/maxvegac/portico/main/static/Caddyfile"
+
+# Define static files URLs once to reuse
+WELCOME_URL="https://raw.githubusercontent.com/maxvegac/portico/main/static/index.html"
+CADDYFILE_URL="https://raw.githubusercontent.com/maxvegac/portico/main/static/Caddyfile"
+CONFIG_URL="https://raw.githubusercontent.com/maxvegac/portico/main/static/config.yml"
+COMPOSE_URL="https://raw.githubusercontent.com/maxvegac/portico/main/static/docker-compose.yml"
+
 # Check static files availability
 STATIC_FILES=(
-  "https://raw.githubusercontent.com/maxvegac/portico/main/static/index.html"   "Welcome page"
-  "https://raw.githubusercontent.com/maxvegac/portico/main/static/Caddyfile"    "Caddyfile"
-  "https://raw.githubusercontent.com/maxvegac/portico/main/static/config.yml"   "Configuration"
-  "https://raw.githubusercontent.com/maxvegac/portico/main/static/docker-compose.yml" "Docker Compose"
+  "$WELCOME_URL"   "Welcome page"
+  "$CADDYFILE_URL" "Caddyfile"
+  "$CONFIG_URL"    "Configuration"
+  "$COMPOSE_URL"   "Docker Compose"
 )
 
 for ((i=0; i<${#STATIC_FILES[@]}; i+=2)); do
@@ -349,11 +358,20 @@ fi
 echo -e "${BLUE}📄 Setting up welcome page...${NC}"
 
 # Download the welcome page from the repository
-WELCOME_URL="https://raw.githubusercontent.com/maxvegac/portico/main/static/index.html"
 if download_file "$WELCOME_URL" "/tmp/index.html" "Welcome page"; then
     sudo mkdir -p /home/portico/static
     sudo mv /tmp/index.html /home/portico/static/index.html
     sudo chown portico:portico /home/portico/static/index.html
+else
+    exit 1
+fi
+
+# Download the base Caddyfile to static directory
+echo -e "${BLUE}📄 Downloading base Caddyfile...${NC}"
+if download_file "$CADDYFILE_URL" "/tmp/Caddyfile" "Caddyfile"; then
+    sudo mkdir -p /home/portico/static
+    sudo mv /tmp/Caddyfile /home/portico/static/Caddyfile
+    sudo chown portico:portico /home/portico/static/Caddyfile
 else
     exit 1
 fi
@@ -378,7 +396,6 @@ fi
 echo -e "${BLUE}📋 Setting up Portico configuration...${NC}"
 
 # Download the config from the repository
-CONFIG_URL="https://raw.githubusercontent.com/maxvegac/portico/main/static/config.yml"
 if download_file "$CONFIG_URL" "/tmp/config.yml" "Configuration"; then
     sudo mv /tmp/config.yml /home/portico/config.yml
     sudo chown portico:portico /home/portico/config.yml
@@ -390,7 +407,6 @@ fi
 echo -e "${BLUE}🚀 Setting up reverse-proxy with Docker...${NC}"
 
 # Download the docker compose from the repository
-COMPOSE_URL="https://raw.githubusercontent.com/maxvegac/portico/main/static/docker-compose.yml"
 if download_file "$COMPOSE_URL" "/tmp/docker-compose.yml" "Docker Compose configuration"; then
     sudo mv /tmp/docker-compose.yml /home/portico/reverse-proxy/docker-compose.yml
     sudo chown portico:portico /home/portico/reverse-proxy/docker-compose.yml
