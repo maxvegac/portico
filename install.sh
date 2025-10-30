@@ -229,9 +229,6 @@ if [[ "$BINARY_AVAILABLE" == "false" ]]; then
     echo -e "${YELLOW}💡 You can check releases at: https://github.com/maxvegac/portico/releases${NC}"
 fi
 
-# Define Caddyfile URL once to reuse in checks and download
-CADDYFILE_URL="https://raw.githubusercontent.com/maxvegac/portico/main/static/Caddyfile"
-
 # Define static files URLs once to reuse
 WELCOME_URL="https://raw.githubusercontent.com/maxvegac/portico/main/static/index.html"
 CADDYFILE_URL="https://raw.githubusercontent.com/maxvegac/portico/main/static/Caddyfile"
