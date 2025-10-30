@@ -52,6 +52,7 @@ func NewAppsDeployCmd() *cobra.Command {
 					Name:        service.Name,
 					Image:       service.Image,
 					Port:        service.Port,
+					ExtraPorts:  service.ExtraPorts,
 					Environment: service.Environment,
 					Volumes:     service.Volumes,
 					Secrets:     service.Secrets,

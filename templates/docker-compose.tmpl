@@ -1,11 +1,14 @@
-version: '3.8'
-
 services:
 {{range .Services}}
   {{.Name}}:
     image: {{.Image}}
     ports:
+{{- if gt .Port 0 }}
       - "{{.Port}}:{{.Port}}"
+{{- end }}
+{{- range .ExtraPorts }}
+      - "{{.}}"
+{{- end }}
     environment:
 {{range $key, $value := .Environment}}
       - {{$key}}={{$value}}

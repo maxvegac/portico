@@ -23,6 +23,7 @@ type Service struct {
 	Name        string            `yaml:"name"`
 	Image       string            `yaml:"image"`
 	Port        int               `yaml:"port"`
+	ExtraPorts  []string          `yaml:"extra_ports"`
 	Environment map[string]string `yaml:"environment"`
 	Volumes     []string          `yaml:"volumes"`
 	Secrets     []string          `yaml:"secrets"`
@@ -44,7 +45,7 @@ func NewManager(appsDir, templatesDir string) *Manager {
 }
 
 // CreateApp creates a new application
-func (am *Manager) CreateApp(name string) error {
+func (am *Manager) CreateApp(name string, port int) error {
 	appDir := filepath.Join(am.AppsDir, name)
 
 	// Create app directory
@@ -58,11 +59,16 @@ func (am *Manager) CreateApp(name string) error {
 		return fmt.Errorf("error creating env directory: %w", err)
 	}
 
+	// Use provided port or default to 8080
+	if port == 0 {
+		port = 8080
+	}
+
 	// Create default app.yml
 	app := &App{
 		Name:        name,
 		Domain:      fmt.Sprintf("%s.localhost", name),
-		Port:        8080,
+		Port:        port,
 		Environment: make(map[string]string),
 		Services: []Service{
 			{

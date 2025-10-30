@@ -25,10 +25,6 @@ func main() {
 	checkUpdateCmd := commands.NewCheckUpdateCmd()
 	autoUpdateCmd := commands.NewAutoUpdateCmd()
 	appsCmd := commands.NewAppsCmd()
-	appsListCmd := commands.NewAppsListCmd()
-	appsCreateCmd := commands.NewAppsCreateCmd()
-	appsDeployCmd := commands.NewAppsDeployCmd()
-	appsDestroyCmd := commands.NewAppsDestroyCmd()
 
 	// Add flags to update command
 	updateCmd.Flags().Bool("dev", false, "Check for development releases instead of stable releases")
@@ -43,12 +39,6 @@ func main() {
 	rootCmd.AddCommand(checkUpdateCmd)
 	rootCmd.AddCommand(autoUpdateCmd)
 	rootCmd.AddCommand(appsCmd)
-
-	// Add subcommands to apps
-	appsCmd.AddCommand(appsListCmd)
-	appsCmd.AddCommand(appsCreateCmd)
-	appsCmd.AddCommand(appsDeployCmd)
-	appsCmd.AddCommand(appsDestroyCmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)

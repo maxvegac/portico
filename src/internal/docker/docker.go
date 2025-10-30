@@ -98,6 +98,7 @@ type Service struct {
 	Name        string
 	Image       string
 	Port        int
+	ExtraPorts  []string
 	Environment map[string]string
 	Volumes     []string
 	Secrets     []string
