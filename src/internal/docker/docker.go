@@ -79,7 +79,7 @@ func (dm *Manager) GenerateDockerCompose(appDir string, services []Service) erro
 	if err != nil {
 		return fmt.Errorf("error creating docker-compose.yml: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	// Execute template
 	if err := t.Execute(file, struct {

@@ -84,7 +84,7 @@ func (um *UpdateManager) checkForStableUpdates() (*Release, error) {
 	if err != nil {
 		return nil, fmt.Errorf("error fetching releases: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("GitHub API returned status %d", resp.StatusCode)
@@ -163,7 +163,7 @@ func (um *UpdateManager) DownloadRelease(release *Release) error {
 	if err != nil {
 		return err
 	}
-	defer os.Remove(tmpFile.Name())
+	defer func() { _ = os.Remove(tmpFile.Name()) }()
 
 	return um.installBinary(tmpFile.Name())
 }
@@ -193,7 +193,7 @@ func (um *UpdateManager) downloadBinary(asset *Asset) (*os.File, error) {
 	if err != nil {
 		return nil, fmt.Errorf("error downloading binary: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("download failed with status %d", resp.StatusCode)
@@ -208,11 +208,13 @@ func (um *UpdateManager) downloadBinary(asset *Asset) (*os.File, error) {
 	// Copy downloaded content to temp file
 	_, err = io.Copy(tmpFile, resp.Body)
 	if err != nil {
-		tmpFile.Close()
-		os.Remove(tmpFile.Name())
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpFile.Name())
 		return nil, fmt.Errorf("error writing to temp file: %w", err)
 	}
-	tmpFile.Close()
+	if cerr := tmpFile.Close(); cerr != nil {
+		return nil, fmt.Errorf("error closing temp file: %w", cerr)
+	}
 
 	return tmpFile, nil
 }
@@ -268,7 +270,7 @@ func atomicReplaceBinary(newBinary, currentBinary string) error {
 }
 
 // atomicCopy performs an atomic file copy to avoid "text file busy" errors
-func atomicCopy(src, dst string, mode os.FileMode) error {
+func atomicCopy(src, dst string, mode os.FileMode) error { // nolint:unused
 	// Create a temporary file in the same directory as destination
 	dstDir := filepath.Dir(dst)
 	tmpFile := filepath.Join(dstDir, ".portico-update-tmp-"+filepath.Base(dst))
@@ -278,32 +280,35 @@ func atomicCopy(src, dst string, mode os.FileMode) error {
 	if err != nil {
 		return fmt.Errorf("error opening source file: %w", err)
 	}
-	defer srcFile.Close()
+	defer func() { _ = srcFile.Close() }()
 
 	// Create temporary destination file
 	tmpFileHandle, err := os.OpenFile(tmpFile, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode)
 	if err != nil {
 		return fmt.Errorf("error creating temporary file: %w", err)
 	}
-	defer tmpFileHandle.Close()
+	defer func() { _ = tmpFileHandle.Close() }()
 
 	// Copy file contents to temporary file
 	_, err = io.Copy(tmpFileHandle, srcFile)
 	if err != nil {
-		os.Remove(tmpFile) // Clean up on error
+		_ = os.Remove(tmpFile) // Clean up on error
 		return fmt.Errorf("error copying file contents: %w", err)
 	}
 
 	// Ensure temporary file is written to disk
 	if err := tmpFileHandle.Sync(); err != nil {
-		os.Remove(tmpFile) // Clean up on error
+		_ = os.Remove(tmpFile) // Clean up on error
 		return fmt.Errorf("error syncing temporary file: %w", err)
 	}
-	tmpFileHandle.Close() // Close before rename
+	if err := tmpFileHandle.Close(); err != nil { // Close before rename
+		_ = os.Remove(tmpFile)
+		return fmt.Errorf("error closing temporary file: %w", err)
+	}
 
 	// Atomically replace the destination file
 	if err := os.Rename(tmpFile, dst); err != nil {
-		os.Remove(tmpFile) // Clean up on error
+		_ = os.Remove(tmpFile) // Clean up on error
 		return fmt.Errorf("error replacing destination file: %w", err)
 	}
 

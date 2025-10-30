@@ -1,6 +1,7 @@
 portico_home: /home/portico
 apps_dir: /home/portico/apps
 proxy_dir: /home/portico/reverse-proxy
+templates_dir: /home/portico/templates
 registry:
   type: internal
   url: localhost:5000

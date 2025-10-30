@@ -1,11 +1,11 @@
 package config
 
 import (
-    "fmt"
-    "os"
-    "path/filepath"
+	"fmt"
+	"os"
+	"path/filepath"
 
-    "github.com/spf13/viper"
+	"github.com/spf13/viper"
 )
 
 // Config represents the Portico configuration
@@ -34,10 +34,10 @@ func isRunningAsRoot() bool {
 
 // canAccessPorticoHome checks if we can access /home/portico
 func canAccessPorticoHome() bool {
-    if _, err := os.Stat("/home/portico"); err != nil {
-        return false
-    }
-    return true
+	if _, err := os.Stat("/home/portico"); err != nil {
+		return false
+	}
+	return true
 }
 
 // getConfigPaths returns appropriate config paths based on execution context
@@ -50,7 +50,7 @@ func getConfigPaths() []string {
 	// Add system paths based on access level
 	if isRunningAsRoot() {
 		paths = append(paths, "/etc/portico", "/home/portico") // System-wide config and Portico home
-    } else if canAccessPorticoHome() {
+	} else if canAccessPorticoHome() {
 		paths = append(paths, "/home/portico") // Portico home
 	}
 

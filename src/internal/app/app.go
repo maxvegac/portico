@@ -173,7 +173,7 @@ func (am *Manager) CreateDefaultCaddyfile(name string) error {
 	if err != nil {
 		return fmt.Errorf("error creating Caddyfile: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	// Use port from app configuration, fallback to default if 0
 	port := app.Port

@@ -31,7 +31,7 @@ func (cm *CaddyManager) UpdateCaddyfile(appsDir string) error {
 
 	// Copy static Caddyfile (which includes import /home/portico/apps/*/Caddyfile)
 	staticCaddyfilePath := filepath.Join(cm.TemplatesDir, "..", "static", "Caddyfile")
-	
+
 	// Read static Caddyfile
 	content, err := os.ReadFile(staticCaddyfilePath)
 	if err != nil {
@@ -45,7 +45,6 @@ func (cm *CaddyManager) UpdateCaddyfile(appsDir string) error {
 
 	return nil
 }
-
 
 // ReloadCaddy reloads the Caddy configuration
 func (cm *CaddyManager) ReloadCaddy() error {
