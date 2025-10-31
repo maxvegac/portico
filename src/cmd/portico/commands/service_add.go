@@ -109,7 +109,13 @@ func NewServiceAddCmd() *cobra.Command {
 					DependsOn:   s.DependsOn,
 				})
 			}
-			if err := dm.GenerateDockerCompose(appDir, dockerServices); err != nil {
+			// Get metadata from app.yml
+			metadata := &docker.PorticoMetadata{
+				Domain: a.Domain,
+				Port:   a.Port,
+			}
+
+			if err := dm.GenerateDockerCompose(appDir, dockerServices, metadata); err != nil {
 				fmt.Printf("Error generating docker compose: %v\n", err)
 				return
 			}

@@ -4,9 +4,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"text/template"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/maxvegac/portico/src/internal/docker"
 )
 
 // App represents a Portico application
@@ -44,8 +48,9 @@ func NewManager(appsDir, templatesDir string) *Manager {
 	}
 }
 
-// CreateApp creates a new application
-func (am *Manager) CreateApp(name string, port int) error {
+// CreateAppDirectories creates app directory structure and default secrets
+// Does not create app.yml - that is now optional/legacy
+func (am *Manager) CreateAppDirectories(name string) error {
 	appDir := filepath.Join(am.AppsDir, name)
 
 	// Create app directory
@@ -59,48 +64,53 @@ func (am *Manager) CreateApp(name string, port int) error {
 		return fmt.Errorf("error creating env directory: %w", err)
 	}
 
-	// Use provided port or default to 8080
-	if port == 0 {
-		port = 8080
-	}
-
-	// Create default app.yml
-	app := &App{
-		Name:        name,
-		Domain:      fmt.Sprintf("%s.localhost", name),
-		Port:        port,
-		Environment: make(map[string]string),
-		Services: []Service{
-			{
-				Name:  "api",
-				Image: "node:22-alpine",
-				Port:  3000,
-				Environment: map[string]string{
-					"NODE_ENV": "production",
-					"PORT":     "3000",
-				},
-			},
-		},
-	}
-
-	if err := am.SaveApp(app); err != nil {
-		return err
-	}
-
-	// Create default Caddyfile
-	if err := am.CreateDefaultCaddyfile(name); err != nil {
-		return err
-	}
-
 	// Create default secret files
 	return am.CreateDefaultSecrets(name)
 }
 
+// CreateApp creates a new application (deprecated - kept for backwards compatibility)
+// Now just creates directories and secrets, app.yml is optional
+func (am *Manager) CreateApp(name string, port int) error {
+	return am.CreateAppDirectories(name)
+}
+
 // SaveApp saves an application configuration
+// If docker-compose.yml exists, updates it. Otherwise saves to app.yml (legacy)
 func (am *Manager) SaveApp(app *App) error {
 	appDir := filepath.Join(am.AppsDir, app.Name)
-	appFile := filepath.Join(appDir, "app.yml")
+	composeFile := filepath.Join(appDir, "docker-compose.yml")
 
+	// If docker-compose.yml exists, update it instead of app.yml
+	if _, err := os.Stat(composeFile); err == nil {
+		// Use docker manager to update compose file
+		dm := docker.NewManager("") // Registry URL not needed for updates
+
+		// Convert app services to docker services
+		var dockerServices []docker.Service
+		for _, svc := range app.Services {
+			dockerServices = append(dockerServices, docker.Service{
+				Name:        svc.Name,
+				Image:       svc.Image,
+				Port:        svc.Port,
+				ExtraPorts:  svc.ExtraPorts,
+				Environment: svc.Environment,
+				Volumes:     svc.Volumes,
+				Secrets:     svc.Secrets,
+				DependsOn:   svc.DependsOn,
+			})
+		}
+
+		// Update metadata
+		metadata := &docker.PorticoMetadata{
+			Domain: app.Domain,
+			Port:   app.Port,
+		}
+
+		return dm.GenerateDockerCompose(appDir, dockerServices, metadata)
+	}
+
+	// Fallback: save to app.yml for backwards compatibility
+	appFile := filepath.Join(appDir, "app.yml")
 	data, err := yaml.Marshal(app)
 	if err != nil {
 		return fmt.Errorf("error marshaling app config: %w", err)
@@ -110,10 +120,18 @@ func (am *Manager) SaveApp(app *App) error {
 }
 
 // LoadApp loads an application configuration
+// First tries to load from docker-compose.yml, falls back to app.yml if not found
 func (am *Manager) LoadApp(name string) (*App, error) {
 	appDir := filepath.Join(am.AppsDir, name)
-	appFile := filepath.Join(appDir, "app.yml")
+	composeFile := filepath.Join(appDir, "docker-compose.yml")
 
+	// Try to load from docker-compose.yml first
+	if _, err := os.Stat(composeFile); err == nil {
+		return am.LoadAppFromCompose(name)
+	}
+
+	// Fallback to app.yml for backwards compatibility
+	appFile := filepath.Join(appDir, "app.yml")
 	data, err := os.ReadFile(appFile)
 	if err != nil {
 		return nil, fmt.Errorf("error reading app config: %w", err)
@@ -125,6 +143,148 @@ func (am *Manager) LoadApp(name string) (*App, error) {
 	}
 
 	return &app, nil
+}
+
+// LoadAppFromCompose loads application configuration from docker-compose.yml
+func (am *Manager) LoadAppFromCompose(name string) (*App, error) {
+	appDir := filepath.Join(am.AppsDir, name)
+
+	// Use docker manager to load compose file
+	dm := docker.NewManager("") // Registry URL not needed for loading
+	compose, err := dm.LoadComposeFile(appDir)
+	if err != nil {
+		return nil, fmt.Errorf("error loading docker-compose.yml: %w", err)
+	}
+
+	// Extract metadata from x-portico
+	domain := ""
+	port := 0
+	if compose.XPortico != nil {
+		domain = compose.XPortico.Domain
+		port = compose.XPortico.Port
+	}
+
+	// Convert services from docker-compose.yml format to App.Service format
+	var services []Service
+	for svcName, svcData := range compose.Services {
+		svc, err := convertServiceFromCompose(svcName, svcData)
+		if err != nil {
+			return nil, fmt.Errorf("error converting service %s: %w", svcName, err)
+		}
+		services = append(services, *svc)
+	}
+
+	// If domain/port not in metadata, try to extract from app name or defaults
+	if domain == "" {
+		domain = fmt.Sprintf("%s.localhost", name)
+	}
+	if port == 0 {
+		port = 8080
+	}
+
+	return &App{
+		Name:        name,
+		Domain:      domain,
+		Port:        port,
+		Environment: make(map[string]string), // App-level environment not stored in compose
+		Services:    services,
+	}, nil
+}
+
+// convertServiceFromCompose converts a service from docker-compose.yml format to App.Service
+func convertServiceFromCompose(name string, svcData interface{}) (*Service, error) {
+	svcMap, ok := svcData.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("service data is not a map")
+	}
+
+	svc := &Service{
+		Name:        name,
+		ExtraPorts:  []string{},
+		Environment: make(map[string]string),
+		Volumes:     []string{},
+		Secrets:     []string{},
+		DependsOn:   []string{},
+	}
+
+	// Extract image
+	if img, ok := svcMap["image"].(string); ok {
+		svc.Image = img
+	}
+
+	// Extract ports - primary port and extra ports
+	if ports, ok := svcMap["ports"].([]interface{}); ok {
+		primaryPort := 0
+		for _, p := range ports {
+			portStr, ok := p.(string)
+			if !ok {
+				continue
+			}
+			// Parse port mapping "host:container" or just "port"
+			parts := strings.Split(portStr, ":")
+			if len(parts) == 2 {
+				containerPort, err := strconv.Atoi(parts[1])
+				if err == nil {
+					if primaryPort == 0 {
+						primaryPort = containerPort
+					} else {
+						svc.ExtraPorts = append(svc.ExtraPorts, portStr)
+					}
+				}
+			} else if len(parts) == 1 {
+				port, err := strconv.Atoi(parts[0])
+				if err == nil && primaryPort == 0 {
+					primaryPort = port
+				}
+			}
+		}
+		svc.Port = primaryPort
+	}
+
+	// Extract environment variables
+	if env, ok := svcMap["environment"].([]interface{}); ok {
+		for _, e := range env {
+			envStr, ok := e.(string)
+			if !ok {
+				continue
+			}
+			// Parse "KEY=VALUE" format
+			parts := strings.SplitN(envStr, "=", 2)
+			if len(parts) == 2 {
+				svc.Environment[parts[0]] = parts[1]
+			}
+		}
+	}
+
+	// Extract volumes
+	if volumes, ok := svcMap["volumes"].([]interface{}); ok {
+		for _, v := range volumes {
+			volStr, ok := v.(string)
+			if ok && !strings.Contains(volStr, "/run/secrets") { // Exclude secrets mount
+				svc.Volumes = append(svc.Volumes, volStr)
+			}
+		}
+	}
+
+	// Extract secrets
+	if secrets, ok := svcMap["secrets"].([]interface{}); ok {
+		for _, s := range secrets {
+			if secretStr, ok := s.(string); ok {
+				svc.Secrets = append(svc.Secrets, secretStr)
+			}
+		}
+	}
+
+	// Extract depends_on
+	if depends, ok := svcMap["depends_on"].([]interface{}); ok {
+		for _, d := range depends {
+			if depStr, ok := d.(string); ok {
+				svc.DependsOn = append(svc.DependsOn, depStr)
+			}
+		}
+	}
+
+	return svc, nil
 }
 
 // ListApps returns a list of all applications

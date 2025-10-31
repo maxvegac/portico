@@ -60,7 +60,12 @@ func NewAppsDeployCmd() *cobra.Command {
 				})
 			}
 
-			if err := dockerManager.GenerateDockerCompose(appDir, dockerServices); err != nil {
+			metadata := &docker.PorticoMetadata{
+				Domain: appConfig.Domain,
+				Port:   appConfig.Port,
+			}
+
+			if err := dockerManager.GenerateDockerCompose(appDir, dockerServices, metadata); err != nil {
 				fmt.Printf("Error generating docker compose: %v\n", err)
 				return
 			}

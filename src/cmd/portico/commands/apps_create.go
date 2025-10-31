@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -11,6 +12,7 @@ import (
 
 	"github.com/maxvegac/portico/src/internal/app"
 	"github.com/maxvegac/portico/src/internal/config"
+	"github.com/maxvegac/portico/src/internal/docker"
 	"github.com/maxvegac/portico/src/internal/proxy"
 )
 
@@ -53,9 +55,42 @@ func NewAppsCreateCmd() *cobra.Command {
 			// Create app manager
 			appManager := app.NewManager(config.AppsDir, config.TemplatesDir)
 
-			// Create the app
-			if err := appManager.CreateApp(appName, port); err != nil {
-				fmt.Printf("Error creating app: %v\n", err)
+			// Create app directories and secrets
+			if err := appManager.CreateAppDirectories(appName); err != nil {
+				fmt.Printf("Error creating app directories: %v\n", err)
+				return
+			}
+
+			// Generate docker-compose.yml directly (no app.yml needed)
+			dockerManager := docker.NewManager(config.Registry.URL)
+			appDir := filepath.Join(config.AppsDir, appName)
+
+			// Create default service
+			dockerServices := []docker.Service{
+				{
+					Name:  "api",
+					Image: "node:22-alpine",
+					Port:  3000,
+					Environment: map[string]string{
+						"NODE_ENV": "production",
+						"PORT":     "3000",
+					},
+				},
+			}
+
+			metadata := &docker.PorticoMetadata{
+				Domain: fmt.Sprintf("%s.localhost", appName),
+				Port:   port,
+			}
+
+			if err := dockerManager.GenerateDockerCompose(appDir, dockerServices, metadata); err != nil {
+				fmt.Printf("Error generating docker compose: %v\n", err)
+				return
+			}
+
+			// Create default Caddyfile
+			if err := appManager.CreateDefaultCaddyfile(appName); err != nil {
+				fmt.Printf("Error creating Caddyfile: %v\n", err)
 				return
 			}
 
