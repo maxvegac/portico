@@ -95,6 +95,11 @@ func main() {
 	rootCmd.AddCommand(portsCmd)
 	rootCmd.AddCommand(storageCmd)
 
+	// Addons commands
+	addonsCmd := commands.NewAddonsCmd()
+	addonsCmd.AddCommand(commands.NewAddonCreateCmd())
+	rootCmd.AddCommand(addonsCmd)
+
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

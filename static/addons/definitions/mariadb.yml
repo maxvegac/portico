@@ -1,0 +1,66 @@
+name: mariadb
+type: database
+description: MariaDB database server
+default_port: 3306
+service_mode: shared
+
+versions:
+  "10":
+    image: mariadb:10
+    environment:
+      MYSQL_DATABASE_FILE: /run/secrets/db_name
+      MYSQL_USER_FILE: /run/secrets/db_user
+      MYSQL_PASSWORD_FILE: /run/secrets/db_password
+      MYSQL_ROOT_PASSWORD_FILE: /run/secrets/root_password
+    volumes:
+      - host_path: ./data
+        container_path: /var/lib/mysql
+        type: bind
+    secrets:
+      - db_name
+      - db_user
+      - db_password
+      - root_password
+    ports:
+      - internal: 3306
+        external: 3306
+  
+  "11":
+    image: mariadb:11
+    environment:
+      MYSQL_DATABASE_FILE: /run/secrets/db_name
+      MYSQL_USER_FILE: /run/secrets/db_user
+      MYSQL_PASSWORD_FILE: /run/secrets/db_password
+      MYSQL_ROOT_PASSWORD_FILE: /run/secrets/root_password
+    volumes:
+      - host_path: ./data
+        container_path: /var/lib/mysql
+        type: bind
+    secrets:
+      - db_name
+      - db_user
+      - db_password
+      - root_password
+    ports:
+      - internal: 3306
+        external: 3306
+  
+  "12":
+    image: mariadb:12
+    environment:
+      MYSQL_DATABASE_FILE: /run/secrets/db_name
+      MYSQL_USER_FILE: /run/secrets/db_user
+      MYSQL_PASSWORD_FILE: /run/secrets/db_password
+      MYSQL_ROOT_PASSWORD_FILE: /run/secrets/root_password
+    volumes:
+      - host_path: ./data
+        container_path: /var/lib/mysql
+        type: bind
+    secrets:
+      - db_name
+      - db_user
+      - db_password
+      - root_password
+    ports:
+      - internal: 3306
+        external: 3306

@@ -107,7 +107,7 @@ fi
 
 # Create directories
 echo -e "${BLUE}📁 Creating directories...${NC}"
-sudo mkdir -p /home/portico/{apps,reverse-proxy,static,logs,templates}
+sudo mkdir -p /home/portico/{apps,reverse-proxy,static,logs,templates,addons/definitions,addons/instances}
 sudo chown -R portico:portico /home/portico
 
 # Create Docker network
@@ -150,6 +150,7 @@ echo -e "${BLUE}🔐 Setting group permissions...${NC}"
 sudo chmod -R g+rwX /home/portico
 sudo chmod g+s /home/portico/apps  # Set setgid bit so new files inherit group
 sudo chmod g+s /home/portico/reverse-proxy  # Set setgid bit so new files inherit group
+sudo chmod g+s /home/portico/addons  # Set setgid bit so new files inherit group
 
 # Download templates
 echo -e "${BLUE}📄 Downloading templates...${NC}"
@@ -180,6 +181,30 @@ if download_file "$DOCKER_COMPOSE_TEMPLATE_URL" "/tmp/docker-compose.tmpl" "Dock
 else
     echo -e "${YELLOW}⚠️  Warning: Could not download docker-compose.tmpl${NC}"
 fi
+
+# Download addon definitions
+echo -e "${BLUE}📦 Downloading addon definitions...${NC}"
+
+ADDON_DEFINITIONS=(
+    "postgresql.yml" "PostgreSQL addon"
+    "mariadb.yml" "MariaDB addon"
+    "mysql.yml" "MySQL addon"
+    "mongodb.yml" "MongoDB addon"
+    "redis.yml" "Redis addon"
+    "valkey.yml" "Valkey addon"
+)
+
+for ((i=0; i<${#ADDON_DEFINITIONS[@]}; i+=2)); do
+    filename=${ADDON_DEFINITIONS[i]}
+    name=${ADDON_DEFINITIONS[i+1]}
+    ADDON_URL="https://raw.githubusercontent.com/maxvegac/portico/main/static/addons/definitions/$filename"
+    if download_file "$ADDON_URL" "/tmp/$filename" "$name"; then
+        sudo mv "/tmp/$filename" "/home/portico/addons/definitions/$filename"
+        sudo chown portico:portico "/home/portico/addons/definitions/$filename"
+    else
+        echo -e "${YELLOW}⚠️  Warning: Could not download $name${NC}"
+    fi
+done
 
 
 # Verify all required files are available
@@ -441,14 +466,24 @@ fi
 echo ""
 echo -e "${BLUE}📋 Next steps:${NC}"
 echo "   1. Visit http://YOUR-IP-ADDRESS to see the welcome page"
-echo "   2. Create your first app: portico apps create my-app"
-echo "   3. Deploy it: portico apps deploy my-app"
+echo "   2. Create your first app: portico create my-app"
+echo "   3. Deploy it: portico up my-app"
 echo ""
 echo -e "${BLUE}🔧 Useful commands:${NC}"
-echo "   portico apps list          # List all applications"
-echo "   portico apps create <name>  # Create new application"
-echo "   portico apps deploy <name> # Deploy application"
-echo "   portico apps destroy <name> # Destroy application"
+echo "   portico list              # List all applications"
+echo "   portico create <name>     # Create new application"
+echo "   portico up <name>         # Start application"
+echo "   portico down <name>       # Stop application"
+echo "   portico status <name>     # Show application status"
+echo ""
+echo -e "${BLUE}📦 Addon commands:${NC}"
+echo "   portico addons list                    # List available addons"
+echo "   portico addons list postgresql         # List versions for an addon"
+echo "   portico addons instances                # List created instances"
+echo "   portico addons create <name> --type postgresql --version 16 --shared"
+echo "   portico addons database <instance> create <db-name>"
+echo "   portico addons link <app> <instance> --database <db-name>"
+echo "   portico addons add <app> redis --version 7"
 echo ""
 echo -e "${BLUE}📖 Check the logs:${NC}"
 echo "   docker compose -f /home/portico/reverse-proxy/docker-compose.yml logs -f"

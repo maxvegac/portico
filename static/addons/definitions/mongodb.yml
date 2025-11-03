@@ -1,0 +1,42 @@
+name: mongodb
+type: database
+description: MongoDB NoSQL database
+default_port: 27017
+service_mode: shared
+
+versions:
+  "7":
+    image: mongo:7
+    environment:
+      MONGO_INITDB_DATABASE_FILE: /run/secrets/db_name
+      MONGO_INITDB_ROOT_USERNAME_FILE: /run/secrets/db_user
+      MONGO_INITDB_ROOT_PASSWORD_FILE: /run/secrets/db_password
+    volumes:
+      - host_path: ./data
+        container_path: /data/db
+        type: bind
+    secrets:
+      - db_name
+      - db_user
+      - db_password
+    ports:
+      - internal: 27017
+        external: 27017
+  
+  "6":
+    image: mongo:6
+    environment:
+      MONGO_INITDB_DATABASE_FILE: /run/secrets/db_name
+      MONGO_INITDB_ROOT_USERNAME_FILE: /run/secrets/db_user
+      MONGO_INITDB_ROOT_PASSWORD_FILE: /run/secrets/db_password
+    volumes:
+      - host_path: ./data
+        container_path: /data/db
+        type: bind
+    secrets:
+      - db_name
+      - db_user
+      - db_password
+    ports:
+      - internal: 27017
+        external: 27017

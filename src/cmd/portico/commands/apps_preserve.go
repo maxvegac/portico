@@ -63,9 +63,9 @@ func NewAppsPreserveCmd() *cobra.Command {
 
 			// Parse to get current content
 			var currentCompose struct {
-				Services map[string]interface{} `yaml:"services"`
-				Networks map[string]interface{} `yaml:"networks,omitempty"`
-				Secrets  map[string]interface{} `yaml:"secrets,omitempty"`
+				Services map[string]interface{}  `yaml:"services"`
+				Networks map[string]interface{}  `yaml:"networks,omitempty"`
+				Secrets  map[string]interface{}  `yaml:"secrets,omitempty"`
 				XPortico *docker.PorticoMetadata `yaml:"x-portico,omitempty"`
 			}
 			if err := yaml.Unmarshal(currentData, &currentCompose); err != nil {
@@ -122,4 +122,3 @@ func NewAppsPreserveCmd() *cobra.Command {
 	cmd.Flags().StringVar(&file, "file", "docker-compose.yml", "File to preserve (default: docker-compose.yml)")
 	return cmd
 }
-

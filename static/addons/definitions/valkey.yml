@@ -1,0 +1,34 @@
+name: valkey
+type: cache
+description: Valkey (Redis fork) in-memory data store
+default_port: 6379
+service_mode: inline # Always added as service in app
+
+versions:
+  "7.2":
+    image: valkey/valkey:7.2
+    environment:
+      VALKEY_PASSWORD_FILE: /run/secrets/valkey_password
+    volumes:
+      - host_path: ./data
+        container_path: /data
+        type: bind
+    secrets:
+      - valkey_password
+    ports:
+      - internal: 6379
+        external: 6379
+  
+  "7.0":
+    image: valkey/valkey:7.0
+    environment:
+      VALKEY_PASSWORD_FILE: /run/secrets/valkey_password
+    volumes:
+      - host_path: ./data
+        container_path: /data
+        type: bind
+    secrets:
+      - valkey_password
+    ports:
+      - internal: 6379
+        external: 6379

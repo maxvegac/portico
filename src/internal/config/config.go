@@ -14,6 +14,7 @@ type Config struct {
 	AppsDir      string         `yaml:"apps_dir"`
 	ProxyDir     string         `yaml:"proxy_dir"`
 	TemplatesDir string         `yaml:"templates_dir"`
+	AddonsDir    string         `yaml:"addons_dir"`
 	Registry     RegistryConfig `yaml:"registry"`
 }
 
@@ -72,6 +73,7 @@ func LoadConfig() (*Config, error) {
 	viper.SetDefault("apps_dir", "/home/portico/apps")
 	viper.SetDefault("proxy_dir", "/home/portico/reverse-proxy")
 	viper.SetDefault("templates_dir", "/home/portico/templates")
+	viper.SetDefault("addons_dir", "/home/portico/addons")
 	viper.SetDefault("registry.type", "internal")
 	viper.SetDefault("registry.url", "localhost:5000")
 
@@ -88,6 +90,7 @@ func LoadConfig() (*Config, error) {
 		AppsDir:      viper.GetString("apps_dir"),
 		ProxyDir:     viper.GetString("proxy_dir"),
 		TemplatesDir: viper.GetString("templates_dir"),
+		AddonsDir:    viper.GetString("addons_dir"),
 		Registry: RegistryConfig{
 			Type:     viper.GetString("registry.type"),
 			URL:      viper.GetString("registry.url"),
@@ -113,6 +116,7 @@ func (c *Config) SaveConfig() error {
 	viper.Set("apps_dir", c.AppsDir)
 	viper.Set("proxy_dir", c.ProxyDir)
 	viper.Set("templates_dir", c.TemplatesDir)
+	viper.Set("addons_dir", c.AddonsDir)
 	viper.Set("registry", c.Registry)
 
 	return viper.WriteConfigAs(configPath)

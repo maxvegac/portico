@@ -1,0 +1,82 @@
+name: postgresql
+type: database
+description: PostgreSQL database server
+default_port: 5432
+service_mode: shared # Can be shared or dedicated
+
+versions:
+  "15":
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB_FILE: /run/secrets/db_name
+      POSTGRES_USER_FILE: /run/secrets/db_user
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - host_path: ./data
+        container_path: /var/lib/postgresql/data
+        type: bind
+    secrets:
+      - db_name
+      - db_user
+      - db_password
+    ports:
+      - internal: 5432
+        external: 5432
+  
+  "16":
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB_FILE: /run/secrets/db_name
+      POSTGRES_USER_FILE: /run/secrets/db_user
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - host_path: ./data
+        container_path: /var/lib/postgresql/data
+        type: bind
+    secrets:
+      - db_name
+      - db_user
+      - db_password
+    ports:
+      - internal: 5432
+        external: 5432
+  
+  "17":
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB_FILE: /run/secrets/db_name
+      POSTGRES_USER_FILE: /run/secrets/db_user
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - host_path: ./data
+        container_path: /var/lib/postgresql/data
+        type: bind
+    secrets:
+      - db_name
+      - db_user
+      - db_password
+    ports:
+      - internal: 5432
+        external: 5432
+  
+  "18":
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB_FILE: /run/secrets/db_name
+      POSTGRES_USER_FILE: /run/secrets/db_user
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - host_path: ./data
+        container_path: /var/lib/postgresql/data
+        type: bind
+    secrets:
+      - db_name
+      - db_user
+      - db_password
+    ports:
+      - internal: 5432
+        external: 5432

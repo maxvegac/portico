@@ -1,0 +1,48 @@
+name: redis
+type: cache
+description: Redis in-memory data store
+default_port: 6379
+service_mode: inline # Always added as service in app
+
+versions:
+  "6":
+    image: redis:6-alpine
+    environment:
+      REDIS_PASSWORD_FILE: /run/secrets/redis_password
+    volumes:
+      - host_path: ./data
+        container_path: /data
+        type: bind
+    secrets:
+      - redis_password
+    ports:
+      - internal: 6379
+        external: 6379
+  
+  "7":
+    image: redis:7-alpine
+    environment:
+      REDIS_PASSWORD_FILE: /run/secrets/redis_password
+    volumes:
+      - host_path: ./data
+        container_path: /data
+        type: bind
+    secrets:
+      - redis_password
+    ports:
+      - internal: 6379
+        external: 6379
+  
+  "8":
+    image: redis:8-alpine
+    environment:
+      REDIS_PASSWORD_FILE: /run/secrets/redis_password
+    volumes:
+      - host_path: ./data
+        container_path: /data
+        type: bind
+    secrets:
+      - redis_password
+    ports:
+      - internal: 6379
+        external: 6379
