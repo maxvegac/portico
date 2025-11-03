@@ -12,15 +12,16 @@ import (
 	"github.com/maxvegac/portico/src/internal/proxy"
 )
 
-// NewAppsDeployCmd creates the apps deploy command
-func NewAppsDeployCmd() *cobra.Command {
+// NewAppsResetCmd creates the apps reset command
+func NewAppsResetCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "deploy [app-name]",
-		Short: "Deploy an application",
+		Use:   "reset [app-name]",
+		Short: "Reset application to saved configuration",
+		Long:  "Reset application by regenerating docker-compose.yml and Caddyfile from saved configuration, then redeploying. Useful after manual changes or to sync state.",
 		Args:  cobra.ExactArgs(1),
 		Run: func(_ *cobra.Command, args []string) {
 			appName := args[0]
-			fmt.Printf("Deploying application: %s\n", appName)
+			fmt.Printf("Resetting application: %s\n", appName)
 
 			// Load config
 			config, err := config.LoadConfig()
@@ -72,7 +73,7 @@ func NewAppsDeployCmd() *cobra.Command {
 
 			// Deploy the application
 			if err := dockerManager.DeployApp(appDir); err != nil {
-				fmt.Printf("Error deploying app: %v\n", err)
+				fmt.Printf("Error redeploying app: %v\n", err)
 				return
 			}
 
@@ -83,7 +84,7 @@ func NewAppsDeployCmd() *cobra.Command {
 				return
 			}
 
-			fmt.Printf("Application %s deployed successfully!\n", appName)
+			fmt.Printf("Application %s reset successfully!\n", appName)
 		},
 	}
 }

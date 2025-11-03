@@ -30,14 +30,24 @@ func main() {
 	createCmd.Use = "create [app-name]"
 	listCmd := commands.NewAppsListCmd()
 	listCmd.Use = "list"
-	deployCmd := commands.NewAppsDeployCmd()
-	deployCmd.Use = "deploy [app-name]"
+	resetCmd := commands.NewAppsResetCmd()
+	resetCmd.Use = "reset [app-name]"
 	destroyCmd := commands.NewAppsDestroyCmd()
 	destroyCmd.Use = "destroy [app-name]"
 	upCmd := commands.NewAppsUpCmd()
 	upCmd.Use = "up [app-name]"
 	downCmd := commands.NewAppsDownCmd()
 	downCmd.Use = "down [app-name]"
+	cdCmd := commands.NewAppsCdCmd()
+	cdCmd.Use = "cd [app-name]"
+	preserveCmd := commands.NewAppsPreserveCmd()
+	preserveCmd.Use = "preserve [app-name]"
+	execCmd := commands.NewAppsExecCmd()
+	execCmd.Use = "exec [app-name] [[service] [command...]]"
+	shellCmd := commands.NewAppsShellCmd()
+	shellCmd.Use = "shell [app-name] [[service] [shell]]"
+	statusCmd := commands.NewAppsStatusCmd()
+	statusCmd.Use = "status [app-name]"
 
 	// Domains command
 	domainsCmd := commands.NewDomainsCmd()
@@ -72,10 +82,15 @@ func main() {
 	// App commands
 	rootCmd.AddCommand(createCmd)
 	rootCmd.AddCommand(listCmd)
-	rootCmd.AddCommand(deployCmd)
+	rootCmd.AddCommand(resetCmd)
 	rootCmd.AddCommand(destroyCmd)
 	rootCmd.AddCommand(upCmd)
 	rootCmd.AddCommand(downCmd)
+	rootCmd.AddCommand(cdCmd)
+	rootCmd.AddCommand(preserveCmd)
+	rootCmd.AddCommand(execCmd)
+	rootCmd.AddCommand(shellCmd)
+	rootCmd.AddCommand(statusCmd)
 	rootCmd.AddCommand(domainsCmd)
 	rootCmd.AddCommand(portsCmd)
 	rootCmd.AddCommand(storageCmd)

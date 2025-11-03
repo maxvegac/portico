@@ -15,7 +15,7 @@ func NewAppsCmd() *cobra.Command {
 	// Subcommands
 	cmd.AddCommand(NewAppsCreateCmd())
 	cmd.AddCommand(NewAppsListCmd())
-	cmd.AddCommand(NewAppsDeployCmd())
+	cmd.AddCommand(NewAppsResetCmd())
 	cmd.AddCommand(NewAppsDestroyCmd())
 	cmd.AddCommand(NewAppsUpCmd())
 	cmd.AddCommand(NewAppsDownCmd())
