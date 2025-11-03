@@ -21,13 +21,12 @@ func NewAppsCmd() *cobra.Command {
 	cmd.AddCommand(NewAppsDownCmd())
 	cmd.AddCommand(NewAppsSetDomainCmd())
 	cmd.AddCommand(NewAppsSetCmd())
-	// Top-level service command
-	svc := NewServiceCmd()
-	svc.AddCommand(NewServiceHTTPCmd())
-	svc.AddCommand(NewServiceAddCmd())
-	svc.AddCommand(NewServiceDeleteCmd())
-	svc.AddCommand(NewServiceListCmd())
-	cmd.AddCommand(svc)
+	// Top-level ports command (not used anymore, but kept for backwards compatibility)
+	ports := NewPortsCmd()
+	ports.AddCommand(NewPortsAddCmd())
+	ports.AddCommand(NewPortsDeleteCmd())
+	ports.AddCommand(NewPortsListCmd())
+	cmd.AddCommand(ports)
 
 	return cmd
 }

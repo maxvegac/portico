@@ -13,18 +13,24 @@ import (
 	"github.com/maxvegac/portico/src/internal/proxy"
 )
 
-// NewServiceDeleteCmd deletes a port mapping for a service in an app
-func NewServiceDeleteCmd() *cobra.Command {
+// NewPortsDeleteCmd deletes a port mapping for a service in an app
+func NewPortsDeleteCmd() *cobra.Command {
 	var serviceName string
 
 	cmd := &cobra.Command{
-		Use:   "delete [app-name] [external:internal|http]",
+		Use:   "delete [external:internal|http]",
 		Short: "Delete a service port mapping or remove HTTP port",
 		Long:  "Delete a service port mapping in the given app (default service 'api'), or use 'http' to remove the HTTP port (disables Caddy proxy for this app).",
-		Args:  cobra.ExactArgs(2),
-		Run: func(_ *cobra.Command, args []string) {
-			appName := args[0]
-			mapping := args[1]
+		Args:  cobra.ExactArgs(1),
+		Run: func(cmd *cobra.Command, args []string) {
+			// Get app-name from parent command (ports)
+			appName, err := getAppNameFromPortsArgs(cmd)
+			if err != nil || appName == "" {
+				fmt.Println("Error: app-name is required")
+				fmt.Println("Usage: portico ports [app-name] delete [external:internal|http]")
+				return
+			}
+			mapping := args[0]
 
 			cfg, err := config.LoadConfig()
 			if err != nil {

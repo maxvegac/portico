@@ -13,19 +13,25 @@ import (
 	"github.com/maxvegac/portico/src/internal/docker"
 )
 
-// NewServiceAddCmd adds a port mapping for a service in an app
-func NewServiceAddCmd() *cobra.Command {
+// NewPortsAddCmd adds a port mapping for a service in an app
+func NewPortsAddCmd() *cobra.Command {
 	var serviceName string
 
 	cmd := &cobra.Command{
-		Use:   "add [app-name] [internal-port] [external-port]",
+		Use:   "add [internal-port] [external-port]",
 		Short: "Add a service port mapping",
-		Long:  "Add a port mapping for a service in the given app.\n\nArguments order:\n  - internal-port: Port inside the container\n  - external-port: Port on the host (cannot be 80 or 443, reserved for Caddy)\n\nExamples:\n  portico service my-app add 3000 8080\n    Maps host port 8080 to container port 3000 (default service: 'api')\n\n  portico service my-app add 5432 5433 --name database\n    Maps host port 5433 to container port 5432 for service 'database'",
-		Args:  cobra.ExactArgs(3),
-		Run: func(_ *cobra.Command, args []string) {
-			appName := args[0]
-			internal := strings.TrimSpace(args[1])
-			external := strings.TrimSpace(args[2])
+		Long:  "Add a port mapping for a service in the given app.\n\nArguments order:\n  - internal-port: Port inside the container\n  - external-port: Port on the host (cannot be 80 or 443, reserved for Caddy)\n\nExamples:\n  portico ports my-app add 3000 8080\n    Maps host port 8080 to container port 3000 (default service: 'api')\n\n  portico ports my-app add 5432 5433 --name database\n    Maps host port 5433 to container port 5432 for service 'database'",
+		Args:  cobra.ExactArgs(2),
+		Run: func(cmd *cobra.Command, args []string) {
+			// Get app-name from parent command (ports)
+			appName, err := getAppNameFromPortsArgs(cmd)
+			if err != nil || appName == "" {
+				fmt.Println("Error: app-name is required")
+				fmt.Println("Usage: portico ports [app-name] add [internal-port] [external-port]")
+				return
+			}
+			internal := strings.TrimSpace(args[0])
+			external := strings.TrimSpace(args[1])
 
 			if internal == "" || external == "" {
 				fmt.Println("Invalid ports")

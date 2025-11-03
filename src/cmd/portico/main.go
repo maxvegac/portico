@@ -24,7 +24,37 @@ func main() {
 	updateCmd := commands.NewUpdateCmd()
 	checkUpdateCmd := commands.NewCheckUpdateCmd()
 	autoUpdateCmd := commands.NewAutoUpdateCmd()
-	appsCmd := commands.NewAppsCmd()
+
+	// App commands - add directly to root (without "apps" prefix)
+	createCmd := commands.NewAppsCreateCmd()
+	createCmd.Use = "create [app-name]"
+	listCmd := commands.NewAppsListCmd()
+	listCmd.Use = "list"
+	deployCmd := commands.NewAppsDeployCmd()
+	deployCmd.Use = "deploy [app-name]"
+	destroyCmd := commands.NewAppsDestroyCmd()
+	destroyCmd.Use = "destroy [app-name]"
+	upCmd := commands.NewAppsUpCmd()
+	upCmd.Use = "up [app-name]"
+	downCmd := commands.NewAppsDownCmd()
+	downCmd.Use = "down [app-name]"
+
+	// Domains command
+	domainsCmd := commands.NewDomainsCmd()
+	domainsCmd.AddCommand(commands.NewDomainsAddCmd())
+	domainsCmd.AddCommand(commands.NewDomainsRemoveCmd())
+
+	// Ports commands (port mappings)
+	portsCmd := commands.NewPortsCmd()
+	portsCmd.AddCommand(commands.NewPortsAddCmd())
+	portsCmd.AddCommand(commands.NewPortsDeleteCmd())
+	portsCmd.AddCommand(commands.NewPortsListCmd())
+
+	// Storage commands (volume mounts)
+	storageCmd := commands.NewStorageCmd()
+	storageCmd.AddCommand(commands.NewStorageAddCmd())
+	storageCmd.AddCommand(commands.NewStorageDeleteCmd())
+	storageCmd.AddCommand(commands.NewStorageListCmd())
 
 	// Add flags to update command
 	updateCmd.Flags().Bool("dev", false, "Check for development releases instead of stable releases")
@@ -38,7 +68,17 @@ func main() {
 	rootCmd.AddCommand(updateCmd)
 	rootCmd.AddCommand(checkUpdateCmd)
 	rootCmd.AddCommand(autoUpdateCmd)
-	rootCmd.AddCommand(appsCmd)
+
+	// App commands
+	rootCmd.AddCommand(createCmd)
+	rootCmd.AddCommand(listCmd)
+	rootCmd.AddCommand(deployCmd)
+	rootCmd.AddCommand(destroyCmd)
+	rootCmd.AddCommand(upCmd)
+	rootCmd.AddCommand(downCmd)
+	rootCmd.AddCommand(domainsCmd)
+	rootCmd.AddCommand(portsCmd)
+	rootCmd.AddCommand(storageCmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)

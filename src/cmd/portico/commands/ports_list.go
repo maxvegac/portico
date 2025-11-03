@@ -9,17 +9,23 @@ import (
 	"github.com/maxvegac/portico/src/internal/config"
 )
 
-// NewServiceListCmd lists port mappings for a service in an app
-func NewServiceListCmd() *cobra.Command {
+// NewPortsListCmd lists port mappings for a service in an app
+func NewPortsListCmd() *cobra.Command {
 	var serviceName string
 
 	cmd := &cobra.Command{
-		Use:   "list [app-name]",
+		Use:   "list",
 		Short: "List service port mappings",
 		Long:  "List the primary and extra port mappings for the selected service in an app.",
-		Args:  cobra.ExactArgs(1),
-		Run: func(_ *cobra.Command, args []string) {
-			appName := args[0]
+		Args:  cobra.ExactArgs(0),
+		Run: func(cmd *cobra.Command, args []string) {
+			// Get app-name from parent command (ports)
+			appName, err := getAppNameFromPortsArgs(cmd)
+			if err != nil || appName == "" {
+				fmt.Println("Error: app-name is required")
+				fmt.Println("Usage: portico ports [app-name] list")
+				return
+			}
 
 			cfg, err := config.LoadConfig()
 			if err != nil {

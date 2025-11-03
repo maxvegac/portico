@@ -440,7 +440,7 @@ fi
 
 echo ""
 echo -e "${BLUE}📋 Next steps:${NC}"
-echo "   1. Visit http://localhost to see the welcome page"
+echo "   1. Visit http://YOUR-IP-ADDRESS to see the welcome page"
 echo "   2. Create your first app: portico apps create my-app"
 echo "   3. Deploy it: portico apps deploy my-app"
 echo ""

@@ -2,7 +2,6 @@ package commands
 
 import (
 	"fmt"
-	"strconv"
 
 	"github.com/spf13/cobra"
 
@@ -11,22 +10,22 @@ import (
 	"github.com/maxvegac/portico/src/internal/proxy"
 )
 
-// NewAppsSetHTTPPortCmd changes the app's HTTP (proxy) port and regenerates Caddyfile
-func NewAppsSetHTTPPortCmd() *cobra.Command {
+// NewDomainsAddCmd adds a domain to an application
+func NewDomainsAddCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "http [app-name] [port]",
-		Short: "Set application HTTP port",
-		Long:  "Update the application's HTTP (proxy) port in app.yml, regenerate the app Caddyfile, and refresh the reverse proxy.",
-		Args:  cobra.ExactArgs(2),
-		Run: func(_ *cobra.Command, args []string) {
-			appName := args[0]
-			portStr := args[1]
-
-			port, err := strconv.Atoi(portStr)
-			if err != nil || port <= 0 || port > 65535 {
-				fmt.Println("Invalid port")
+		Use:   "add [domain]",
+		Short: "Add domain to application",
+		Long:  "Add a domain to the application, update app.yml, regenerate the app Caddyfile, and refresh the reverse proxy.",
+		Args:  cobra.ExactArgs(1),
+		Run: func(cmd *cobra.Command, args []string) {
+			// Get app-name from parent command (domains)
+			appName, err := getAppNameFromDomainsArgs(cmd)
+			if err != nil || appName == "" {
+				fmt.Println("Error: app-name is required")
+				fmt.Println("Usage: portico domains [app-name] add [domain]")
 				return
 			}
+			domain := args[0]
 
 			cfg, err := config.LoadConfig()
 			if err != nil {
@@ -41,7 +40,7 @@ func NewAppsSetHTTPPortCmd() *cobra.Command {
 				return
 			}
 
-			a.Port = port
+			a.Domain = domain
 			if err := am.SaveApp(a); err != nil {
 				fmt.Printf("Error saving app: %v\n", err)
 				return
@@ -58,7 +57,7 @@ func NewAppsSetHTTPPortCmd() *cobra.Command {
 				return
 			}
 
-			fmt.Printf("Port for %s set to %d\n", appName, port)
+			fmt.Printf("Domain %s added to %s\n", domain, appName)
 		},
 	}
 }

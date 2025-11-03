@@ -2,7 +2,6 @@ package commands
 
 import (
 	"fmt"
-	"strconv"
 
 	"github.com/spf13/cobra"
 
@@ -11,22 +10,22 @@ import (
 	"github.com/maxvegac/portico/src/internal/proxy"
 )
 
-// NewServiceHTTPCmd sets the HTTP port for an app (the port Caddy proxies to)
-func NewServiceHTTPCmd() *cobra.Command {
+// NewDomainsRemoveCmd removes a domain from an application
+func NewDomainsRemoveCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "http [app-name] [internal-port]",
-		Short: "Set application HTTP port",
-		Long:  "Set the HTTP port that Caddy will proxy to for the given application. Updates app.yml, regenerates the app Caddyfile, and refreshes the reverse proxy.",
-		Args:  cobra.ExactArgs(2),
-		Run: func(_ *cobra.Command, args []string) {
-			appName := args[0]
-			portStr := args[1]
-
-			port, err := strconv.Atoi(portStr)
-			if err != nil || port <= 0 || port > 65535 {
-				fmt.Println("Invalid port")
+		Use:   "remove [domain]",
+		Short: "Remove domain from application",
+		Long:  "Remove a domain from the application, update app.yml, regenerate the app Caddyfile, and refresh the reverse proxy.",
+		Args:  cobra.ExactArgs(1),
+		Run: func(cmd *cobra.Command, args []string) {
+			// Get app-name from parent command (domains)
+			appName, err := getAppNameFromDomainsArgs(cmd)
+			if err != nil || appName == "" {
+				fmt.Println("Error: app-name is required")
+				fmt.Println("Usage: portico domains [app-name] remove [domain]")
 				return
 			}
+			domain := args[0]
 
 			cfg, err := config.LoadConfig()
 			if err != nil {
@@ -41,7 +40,13 @@ func NewServiceHTTPCmd() *cobra.Command {
 				return
 			}
 
-			a.Port = port
+			if a.Domain != domain {
+				fmt.Printf("Domain %s not found for app %s (current domain: %s)\n", domain, appName, a.Domain)
+				return
+			}
+
+			// Remove domain (set to empty or default)
+			a.Domain = fmt.Sprintf("%s.localhost", appName)
 			if err := am.SaveApp(a); err != nil {
 				fmt.Printf("Error saving app: %v\n", err)
 				return
@@ -58,7 +63,7 @@ func NewServiceHTTPCmd() *cobra.Command {
 				return
 			}
 
-			fmt.Printf("HTTP port for %s set to %d\n", appName, port)
+			fmt.Printf("Domain %s removed from %s\n", domain, appName)
 		},
 	}
 }
