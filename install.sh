@@ -76,13 +76,60 @@ esac
 
 echo -e "${BLUE}📋 Detected: $OS $ARCH${NC}"
 
+# Detect Linux distribution
+DISTRO=""
+if [ -f /etc/os-release ]; then
+    . /etc/os-release
+    DISTRO=$ID
+    if [ -z "$DISTRO" ]; then
+        DISTRO=$ID_LIKE
+    fi
+fi
+
 # Check if Docker is installed
 if ! command -v docker &> /dev/null; then
     echo -e "${YELLOW}🐳 Docker not found. Installing Docker...${NC}"
-    curl -fsSL https://get.docker.com -o get-docker.sh
-    sudo sh get-docker.sh
+    
+    # Install Docker based on distribution
+    case $DISTRO in
+        almalinux|rocky|centos|rhel|fedora|oracle)
+            echo -e "${BLUE}📦 Installing Docker for RHEL-based distribution...${NC}"
+            # Install required packages
+            if command -v dnf &> /dev/null; then
+                sudo dnf install -y dnf-plugins-core
+                sudo dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+                sudo dnf install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+            elif command -v yum &> /dev/null; then
+                sudo yum install -y yum-utils
+                sudo yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+                sudo yum install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+            else
+                echo -e "${RED}❌ Package manager (dnf/yum) not found${NC}"
+                exit 1
+            fi
+            # Start and enable Docker
+            sudo systemctl start docker
+            sudo systemctl enable docker
+            ;;
+        ubuntu|debian)
+            echo -e "${BLUE}📦 Installing Docker for Debian-based distribution...${NC}"
+            curl -fsSL https://get.docker.com -o get-docker.sh
+            sudo sh get-docker.sh
+            rm get-docker.sh
+            ;;
+        *)
+            echo -e "${YELLOW}⚠️  Unknown distribution, trying generic Docker installation...${NC}"
+            curl -fsSL https://get.docker.com -o get-docker.sh
+            sudo sh get-docker.sh
+            rm get-docker.sh
+            ;;
+    esac
+    
+    # Add user to docker group
     sudo usermod -aG docker $USER
-    rm get-docker.sh
+    
+    echo -e "${GREEN}✅ Docker installed successfully${NC}"
+    echo -e "${YELLOW}⚠️  Note: You may need to log out and back in for group changes to take effect${NC}"
 else
     echo -e "${GREEN}✅ Docker is already installed${NC}"
 fi
