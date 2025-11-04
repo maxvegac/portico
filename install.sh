@@ -154,7 +154,7 @@ fi
 
 # Create directories
 echo -e "${BLUE}📁 Creating directories...${NC}"
-sudo mkdir -p /home/portico/{apps,reverse-proxy,static,logs,templates,addons/definitions,addons/instances}
+sudo mkdir -p /home/portico/{apps,reverse-proxy,static,logs,addons/definitions,addons/instances,repos,bin,.tmp}
 sudo chown -R portico:portico /home/portico
 
 # Create Docker network
@@ -199,59 +199,22 @@ sudo chmod g+s /home/portico/apps  # Set setgid bit so new files inherit group
 sudo chmod g+s /home/portico/reverse-proxy  # Set setgid bit so new files inherit group
 sudo chmod g+s /home/portico/addons  # Set setgid bit so new files inherit group
 
-# Download templates
-echo -e "${BLUE}📄 Downloading templates...${NC}"
+# Addon definitions are now embedded in the binary and will be extracted by portico init
+echo -e "${GREEN}✅ Addon definitions are embedded in the binary${NC}"
 
-# Download caddy-app.tmpl
-CADDY_APP_TEMPLATE_URL="https://raw.githubusercontent.com/maxvegac/portico/main/templates/caddy-app.tmpl"
-if download_file "$CADDY_APP_TEMPLATE_URL" "/tmp/caddy-app.tmpl" "Caddy app template"; then
-    sudo mv /tmp/caddy-app.tmpl /home/portico/templates/caddy-app.tmpl
-    sudo chown portico:portico /home/portico/templates/caddy-app.tmpl
-else
-    echo -e "${YELLOW}⚠️  Warning: Could not download caddy-app.tmpl${NC}"
+# Setup Git Deployment
+echo -e "${BLUE}🔧 Setting up Git Deployment...${NC}"
+
+# Setup SSH for portico user
+sudo -u portico mkdir -p /home/portico/.ssh
+sudo -u portico chmod 700 /home/portico/.ssh
+
+if [ ! -f /home/portico/.ssh/authorized_keys ]; then
+    sudo -u portico touch /home/portico/.ssh/authorized_keys
+    sudo -u portico chmod 600 /home/portico/.ssh/authorized_keys
 fi
 
-# Download app.yml.tmpl
-APP_YML_TEMPLATE_URL="https://raw.githubusercontent.com/maxvegac/portico/main/templates/app.yml.tmpl"
-if download_file "$APP_YML_TEMPLATE_URL" "/tmp/app.yml.tmpl" "App YAML template"; then
-    sudo mv /tmp/app.yml.tmpl /home/portico/templates/app.yml.tmpl
-    sudo chown portico:portico /home/portico/templates/app.yml.tmpl
-else
-    echo -e "${YELLOW}⚠️  Warning: Could not download app.yml.tmpl${NC}"
-fi
-
-# Download docker-compose.tmpl
-DOCKER_COMPOSE_TEMPLATE_URL="https://raw.githubusercontent.com/maxvegac/portico/main/templates/docker-compose.tmpl"
-if download_file "$DOCKER_COMPOSE_TEMPLATE_URL" "/tmp/docker-compose.tmpl" "Docker Compose template"; then
-    sudo mv /tmp/docker-compose.tmpl /home/portico/templates/docker-compose.tmpl
-    sudo chown portico:portico /home/portico/templates/docker-compose.tmpl
-else
-    echo -e "${YELLOW}⚠️  Warning: Could not download docker-compose.tmpl${NC}"
-fi
-
-# Download addon definitions
-echo -e "${BLUE}📦 Downloading addon definitions...${NC}"
-
-ADDON_DEFINITIONS=(
-    "postgresql.yml" "PostgreSQL addon"
-    "mariadb.yml" "MariaDB addon"
-    "mysql.yml" "MySQL addon"
-    "mongodb.yml" "MongoDB addon"
-    "redis.yml" "Redis addon"
-    "valkey.yml" "Valkey addon"
-)
-
-for ((i=0; i<${#ADDON_DEFINITIONS[@]}; i+=2)); do
-    filename=${ADDON_DEFINITIONS[i]}
-    name=${ADDON_DEFINITIONS[i+1]}
-    ADDON_URL="https://raw.githubusercontent.com/maxvegac/portico/main/static/addons/definitions/$filename"
-    if download_file "$ADDON_URL" "/tmp/$filename" "$name"; then
-        sudo mv "/tmp/$filename" "/home/portico/addons/definitions/$filename"
-        sudo chown portico:portico "/home/portico/addons/definitions/$filename"
-    else
-        echo -e "${YELLOW}⚠️  Warning: Could not download $name${NC}"
-    fi
-done
+echo -e "${GREEN}✅ Git deployment configured${NC}"
 
 
 # Verify all required files are available
@@ -301,31 +264,7 @@ if [[ "$BINARY_AVAILABLE" == "false" ]]; then
     echo -e "${YELLOW}💡 You can check releases at: https://github.com/maxvegac/portico/releases${NC}"
 fi
 
-# Define static files URLs once to reuse
-WELCOME_URL="https://raw.githubusercontent.com/maxvegac/portico/main/static/index.html"
-CADDYFILE_URL="https://raw.githubusercontent.com/maxvegac/portico/main/static/Caddyfile"
-CONFIG_URL="https://raw.githubusercontent.com/maxvegac/portico/main/static/config.yml"
-COMPOSE_URL="https://raw.githubusercontent.com/maxvegac/portico/main/static/docker-compose.yml"
 
-# Check static files availability
-STATIC_FILES=(
-  "$WELCOME_URL"   "Welcome page"
-  "$CADDYFILE_URL" "Caddyfile"
-  "$CONFIG_URL"    "Configuration"
-  "$COMPOSE_URL"   "Docker Compose"
-)
-
-for ((i=0; i<${#STATIC_FILES[@]}; i+=2)); do
-  url=${STATIC_FILES[i]}
-  name=${STATIC_FILES[i+1]}
-  if ! check_url "$url" "$name"; then
-    echo -e "${RED}❌ Required file $name is not available${NC}"
-    echo -e "${YELLOW}💡 Please check: https://github.com/maxvegac/portico${NC}"
-    exit 1
-  fi
-done
-
-echo -e "${GREEN}✅ All required files are available${NC}"
 
 # Download or build Portico CLI binary
 echo -e "${BLUE}📦 Setting up Portico CLI...${NC}"
@@ -423,63 +362,16 @@ if [[ "$BINARY_AVAILABLE" == "false" ]]; then
     fi
 fi
 
-# Create welcome page
-echo -e "${BLUE}📄 Setting up welcome page...${NC}"
+# Extract static files from embedded binary
+echo -e "${BLUE}📄 Extracting static files from embedded binary...${NC}"
 
-# Download the welcome page from the repository
-if download_file "$WELCOME_URL" "/tmp/index.html" "Welcome page"; then
-    sudo mkdir -p /home/portico/static
-    sudo mv /tmp/index.html /home/portico/static/index.html
-    sudo chown portico:portico /home/portico/static/index.html
+# Use portico init to extract all embedded static files
+# Use full path to binary since PATH may not include /usr/local/bin for portico user
+if sudo -u portico /usr/local/bin/portico init; then
+    echo -e "${GREEN}✅ Static files extracted successfully${NC}"
 else
-    exit 1
-fi
-
-# Download the base Caddyfile to static directory
-echo -e "${BLUE}📄 Downloading base Caddyfile...${NC}"
-if download_file "$CADDYFILE_URL" "/tmp/Caddyfile" "Caddyfile"; then
-    sudo mkdir -p /home/portico/static
-    sudo mv /tmp/Caddyfile /home/portico/static/Caddyfile
-    sudo chown portico:portico /home/portico/static/Caddyfile
-else
-    exit 1
-fi
-
-# Create initial Caddyfile
-echo -e "${BLUE}⚙️  Setting up Caddyfile...${NC}"
-
-# Create reverse-proxy directory
-sudo mkdir -p /home/portico/reverse-proxy
-sudo chown portico:portico /home/portico/reverse-proxy
-
-# Copy the static Caddyfile to reverse-proxy directory
-if [[ -f "/home/portico/static/Caddyfile" ]]; then
-    sudo cp /home/portico/static/Caddyfile /home/portico/reverse-proxy/Caddyfile
-    sudo chown portico:portico /home/portico/reverse-proxy/Caddyfile
-    echo -e "${GREEN}✅ Caddyfile copied to reverse-proxy directory${NC}"
-else
-    echo -e "${YELLOW}⚠️  Warning: static/Caddyfile not found, will be created when needed${NC}"
-fi
-
-# Create portico config
-echo -e "${BLUE}📋 Setting up Portico configuration...${NC}"
-
-# Download the config from the repository
-if download_file "$CONFIG_URL" "/tmp/config.yml" "Configuration"; then
-    sudo mv /tmp/config.yml /home/portico/config.yml
-    sudo chown portico:portico /home/portico/config.yml
-else
-    exit 1
-fi
-
-# Create reverse-proxy docker compose
-echo -e "${BLUE}🚀 Setting up reverse-proxy with Docker...${NC}"
-
-# Download the docker compose from the repository
-if download_file "$COMPOSE_URL" "/tmp/docker-compose.yml" "Docker Compose configuration"; then
-    sudo mv /tmp/docker-compose.yml /home/portico/reverse-proxy/docker-compose.yml
-    sudo chown portico:portico /home/portico/reverse-proxy/docker-compose.yml
-else
+    echo -e "${RED}❌ Failed to extract static files${NC}"
+    echo -e "${YELLOW}💡 Make sure portico binary is installed and accessible${NC}"
     exit 1
 fi
 
@@ -522,6 +414,12 @@ echo "   portico create <name>     # Create new application"
 echo "   portico up <name>         # Start application"
 echo "   portico down <name>       # Stop application"
 echo "   portico status <name>     # Show application status"
+echo ""
+echo -e "${BLUE}🚀 Git Deployment:${NC}"
+echo "   1. Add your SSH key: portico ssh add ~/.ssh/id_rsa.pub \"my-key\""
+echo "   2. Create app (creates git repo automatically): portico create my-app"
+echo "   3. Push from your machine: git remote add portico portico@$(hostname):my-app.git"
+echo "   4. Deploy: git push portico main"
 echo ""
 echo -e "${BLUE}📦 Addon commands:${NC}"
 echo "   portico addons list                    # List available addons"

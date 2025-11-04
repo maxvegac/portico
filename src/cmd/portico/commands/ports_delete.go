@@ -20,7 +20,7 @@ func NewPortsDeleteCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "delete [external:internal|http]",
 		Short: "Delete a service port mapping or remove HTTP port",
-		Long:  "Delete a service port mapping in the given app (default service 'api'), or use 'http' to remove the HTTP port (disables Caddy proxy for this app).",
+		Long:  "Delete a service port mapping in the given app (default service: auto-detected), or use 'http' to remove the HTTP port (disables Caddy proxy for this app).",
 		Args:  cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
 			// Get app-name from parent command (ports)
@@ -67,6 +67,16 @@ func NewPortsDeleteCmd() *cobra.Command {
 				return
 			}
 
+			// Auto-detect service if not specified
+			if serviceName == "" {
+				if len(a.Services) == 1 {
+					serviceName = a.Services[0].Name
+				} else {
+					// Use "web" as default (main service)
+					serviceName = "web"
+				}
+			}
+
 			found := false
 			removed := false
 			for i := range a.Services {
@@ -103,6 +113,10 @@ func NewPortsDeleteCmd() *cobra.Command {
 
 			var dockerServices []docker.Service
 			for _, s := range a.Services {
+				replicas := s.Replicas
+				if replicas == 0 {
+					replicas = 1 // Default to 1 if not specified
+				}
 				dockerServices = append(dockerServices, docker.Service{
 					Name:        s.Name,
 					Image:       s.Image,
@@ -112,6 +126,7 @@ func NewPortsDeleteCmd() *cobra.Command {
 					Volumes:     s.Volumes,
 					Secrets:     s.Secrets,
 					DependsOn:   s.DependsOn,
+					Replicas:    replicas,
 				})
 			}
 			// Get metadata from app.yml
@@ -124,7 +139,7 @@ func NewPortsDeleteCmd() *cobra.Command {
 				fmt.Printf("Error generating docker compose: %v\n", err)
 				return
 			}
-			if err := dm.DeployApp(appDir); err != nil {
+			if err := dm.DeployApp(appDir, dockerServices); err != nil {
 				fmt.Printf("Error deploying app: %v\n", err)
 				return
 			}
@@ -133,6 +148,6 @@ func NewPortsDeleteCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&serviceName, "name", "api", "service name (default: api)")
+	cmd.Flags().StringVar(&serviceName, "name", "", "service name (default: auto-detect)")
 	return cmd
 }

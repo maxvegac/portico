@@ -11,6 +11,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/maxvegac/portico/src/internal/docker"
+	"github.com/maxvegac/portico/src/internal/embed"
 )
 
 // App represents a Portico application
@@ -32,6 +33,7 @@ type Service struct {
 	Volumes     []string          `yaml:"volumes"`
 	Secrets     []string          `yaml:"secrets"`
 	DependsOn   []string          `yaml:"depends_on"`
+	Replicas    int               `yaml:"replicas,omitempty"` // Number of instances (default: 1)
 }
 
 // AppManager handles application operations
@@ -327,9 +329,13 @@ func (am *Manager) CreateDefaultCaddyfile(name string) error {
 		domain = fmt.Sprintf("%s.localhost", name)
 	}
 
-	// Load template from configured templates directory
-	templatePath := filepath.Join(am.TemplatesDir, "caddy-app.tmpl")
-	t, err := template.ParseFiles(templatePath)
+	// Load template from embedded files
+	templateData, err := embed.Templates.ReadFile("templates/caddy-app.tmpl")
+	if err != nil {
+		return fmt.Errorf("error reading caddy-app template: %w", err)
+	}
+
+	t, err := template.New("caddy-app").Parse(string(templateData))
 	if err != nil {
 		return fmt.Errorf("error parsing caddy-app template: %w", err)
 	}
@@ -341,21 +347,45 @@ func (am *Manager) CreateDefaultCaddyfile(name string) error {
 	}
 	defer func() { _ = file.Close() }()
 
-	// Use port from app configuration, fallback to default if 0
-	port := app.Port
-	if port == 0 {
-		port = 8080
+	// Find the main service (the one with HTTP port, or first service if only one)
+	var mainService *Service
+	var servicePort int
+
+	if len(app.Services) == 0 {
+		return fmt.Errorf("no services found in app %s", name)
+	}
+
+	// Try to find service with port matching app.Port (HTTP port)
+	if app.Port > 0 {
+		for i := range app.Services {
+			if app.Services[i].Port == app.Port {
+				mainService = &app.Services[i]
+				servicePort = app.Port
+				break
+			}
+		}
+	}
+
+	// If not found, use first service
+	if mainService == nil {
+		mainService = &app.Services[0]
+		servicePort = mainService.Port
+		if servicePort == 0 {
+			servicePort = 8080
+		}
 	}
 
 	// Execute template
 	if err := t.Execute(file, struct {
-		AppName string
-		Domain  string
-		Port    int
+		AppName     string
+		Domain      string
+		ServiceName string
+		Port        int
 	}{
-		AppName: name,
-		Domain:  domain,
-		Port:    port,
+		AppName:     name,
+		Domain:      domain,
+		ServiceName: mainService.Name,
+		Port:        servicePort,
 	}); err != nil {
 		return fmt.Errorf("error executing caddy-app template: %w", err)
 	}

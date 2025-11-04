@@ -3,7 +3,7 @@
 
 {{.Domain}} {
     # Reverse proxy to backend service
-    reverse_proxy {{.AppName}}:{{.Port}}
+    reverse_proxy {{.ServiceName}}:{{.Port}}
     
     # Logging
     log {

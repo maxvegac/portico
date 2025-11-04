@@ -100,6 +100,18 @@ func main() {
 	addonsCmd.AddCommand(commands.NewAddonCreateCmd())
 	rootCmd.AddCommand(addonsCmd)
 
+	// Service commands
+	rootCmd.AddCommand(commands.NewServiceCmd())
+
+	// SSH commands (for managing git deployment keys)
+	rootCmd.AddCommand(commands.NewSSHCmd())
+
+	// Init command (for extracting embedded static files)
+	rootCmd.AddCommand(commands.NewInitCmd())
+
+	// Git commands (internal)
+	rootCmd.AddCommand(commands.NewGitReceiveCmd())
+
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

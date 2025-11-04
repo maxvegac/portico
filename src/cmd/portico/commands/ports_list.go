@@ -40,8 +40,14 @@ func NewPortsListCmd() *cobra.Command {
 				return
 			}
 
+			// Auto-detect service if not specified
 			if serviceName == "" {
-				serviceName = "api"
+				if len(a.Services) == 1 {
+					serviceName = a.Services[0].Name
+				} else {
+					// Use "web" as default (main service)
+					serviceName = "web"
+				}
 			}
 
 			// Show HTTP port (app level)
@@ -71,6 +77,6 @@ func NewPortsListCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&serviceName, "name", "api", "service name (default: api)")
+	cmd.Flags().StringVar(&serviceName, "name", "", "service name (default: auto-detect)")
 	return cmd
 }

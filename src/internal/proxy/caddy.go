@@ -4,19 +4,19 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/maxvegac/portico/src/internal/embed"
 )
 
 // CaddyManager handles Caddy proxy configuration
 type CaddyManager struct {
-	ConfigDir    string
-	TemplatesDir string
+	ConfigDir string
 }
 
 // NewCaddyManager creates a new CaddyManager
-func NewCaddyManager(configDir, templatesDir string) *CaddyManager {
+func NewCaddyManager(configDir, _ string) *CaddyManager {
 	return &CaddyManager{
-		ConfigDir:    configDir,
-		TemplatesDir: templatesDir,
+		ConfigDir: configDir,
 	}
 }
 
@@ -29,13 +29,10 @@ func (cm *CaddyManager) UpdateCaddyfile(appsDir string) error {
 		return fmt.Errorf("error creating proxy directory: %w", err)
 	}
 
-	// Copy static Caddyfile (which includes import /home/portico/apps/*/Caddyfile)
-	staticCaddyfilePath := filepath.Join(cm.TemplatesDir, "..", "static", "Caddyfile")
-
-	// Read static Caddyfile
-	content, err := os.ReadFile(staticCaddyfilePath)
+	// Read static Caddyfile from embedded files
+	content, err := embed.StaticFiles.ReadFile("static/Caddyfile")
 	if err != nil {
-		return fmt.Errorf("error reading static Caddyfile: %w", err)
+		return fmt.Errorf("error reading static Caddyfile from embed: %w", err)
 	}
 
 	// Write to proxy directory

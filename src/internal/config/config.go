@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 
 	"github.com/spf13/viper"
+
+	"github.com/maxvegac/portico/src/internal/embed"
 )
 
 // Config represents the Portico configuration
@@ -81,7 +83,21 @@ func LoadConfig() (*Config, error) {
 		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
 			return nil, fmt.Errorf("error reading config file: %w", err)
 		}
-		// Config file not found, use defaults
+		// Config file not found, try to create from embedded default
+		porticoHome := viper.GetString("portico_home")
+		if porticoHome == "" {
+			porticoHome = "/home/portico"
+		}
+		configPath := filepath.Join(porticoHome, "config.yml")
+		if err := embed.ExtractStaticFile("static/config.yml", configPath); err == nil {
+			// Try reading again after creating from embed
+			viper.SetConfigFile(configPath)
+			if err := viper.ReadInConfig(); err != nil {
+				// Still failed, use defaults (ignored)
+				_ = err
+			}
+		}
+		// Otherwise use defaults
 	}
 
 	// Create config manually from viper values

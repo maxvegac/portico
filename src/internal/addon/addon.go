@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/maxvegac/portico/src/internal/embed"
 )
 
 // Manager handles addon operations
@@ -61,18 +63,23 @@ func (am *Manager) LoadDefinition(addonType string) (*Definition, error) {
 	// Try to load from installed addons first
 	defPath := filepath.Join(am.AddonsDir, "definitions", fmt.Sprintf("%s.yml", addonType))
 
-	// If not found, try static directory (for development/defaults)
-	if _, err := os.Stat(defPath); os.IsNotExist(err) {
-		// Try static directory relative to workspace
-		staticPath := filepath.Join("static", "addons", "definitions", fmt.Sprintf("%s.yml", addonType))
-		if _, err := os.Stat(staticPath); err == nil {
-			defPath = staticPath
-		}
-	}
+	var data []byte
 
-	data, err := os.ReadFile(defPath)
-	if err != nil {
-		return nil, fmt.Errorf("error reading addon definition: %w", err)
+	// Try to read from filesystem first
+	if _, err := os.Stat(defPath); err == nil {
+		var readErr error
+		data, readErr = os.ReadFile(defPath)
+		if readErr != nil {
+			return nil, fmt.Errorf("error reading addon definition: %w", readErr)
+		}
+	} else {
+		// If not found in filesystem, try embedded files
+		embedPath := fmt.Sprintf("static/addons/definitions/%s.yml", addonType)
+		var readErr error
+		data, readErr = embed.StaticFiles.ReadFile(embedPath)
+		if readErr != nil {
+			return nil, fmt.Errorf("error reading addon definition from embed: %w", readErr)
+		}
 	}
 
 	var def Definition

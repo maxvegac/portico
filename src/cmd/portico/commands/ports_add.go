@@ -20,7 +20,7 @@ func NewPortsAddCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "add [internal-port] [external-port]",
 		Short: "Add a service port mapping",
-		Long:  "Add a port mapping for a service in the given app.\n\nArguments order:\n  - internal-port: Port inside the container\n  - external-port: Port on the host (cannot be 80 or 443, reserved for Caddy)\n\nExamples:\n  portico ports my-app add 3000 8080\n    Maps host port 8080 to container port 3000 (default service: 'api')\n\n  portico ports my-app add 5432 5433 --name database\n    Maps host port 5433 to container port 5432 for service 'database'",
+		Long:  "Add a port mapping for a service in the given app.\n\nArguments order:\n  - internal-port: Port inside the container\n  - external-port: Port on the host (cannot be 80 or 443, reserved for Caddy)\n\nExamples:\n  portico ports my-app add 3000 8080\n    Maps host port 8080 to container port 3000 (default service: auto-detected)\n\n  portico ports my-app add 5432 5433 --name database\n    Maps host port 5433 to container port 5432 for service 'database'",
 		Args:  cobra.ExactArgs(2),
 		Run: func(cmd *cobra.Command, args []string) {
 			// Get app-name from parent command (ports)
@@ -49,10 +49,6 @@ func NewPortsAddCmd() *cobra.Command {
 				return
 			}
 
-			if serviceName == "" {
-				serviceName = "api"
-			}
-
 			cfg, err := config.LoadConfig()
 			if err != nil {
 				fmt.Printf("Error loading config: %v\n", err)
@@ -64,6 +60,16 @@ func NewPortsAddCmd() *cobra.Command {
 			if err != nil {
 				fmt.Printf("Error loading app: %v\n", err)
 				return
+			}
+
+			// Auto-detect service if not specified
+			if serviceName == "" {
+				if len(a.Services) == 1 {
+					serviceName = a.Services[0].Name
+				} else {
+					// Use "web" as default (main service)
+					serviceName = "web"
+				}
 			}
 
 			mapping := external + ":" + internal
@@ -104,6 +110,10 @@ func NewPortsAddCmd() *cobra.Command {
 
 			var dockerServices []docker.Service
 			for _, s := range a.Services {
+				replicas := s.Replicas
+				if replicas == 0 {
+					replicas = 1 // Default to 1 if not specified
+				}
 				dockerServices = append(dockerServices, docker.Service{
 					Name:        s.Name,
 					Image:       s.Image,
@@ -113,6 +123,7 @@ func NewPortsAddCmd() *cobra.Command {
 					Volumes:     s.Volumes,
 					Secrets:     s.Secrets,
 					DependsOn:   s.DependsOn,
+					Replicas:    replicas,
 				})
 			}
 			// Get metadata from app.yml
@@ -125,7 +136,7 @@ func NewPortsAddCmd() *cobra.Command {
 				fmt.Printf("Error generating docker compose: %v\n", err)
 				return
 			}
-			if err := dm.DeployApp(appDir); err != nil {
+			if err := dm.DeployApp(appDir, dockerServices); err != nil {
 				fmt.Printf("Error deploying app: %v\n", err)
 				return
 			}
@@ -134,6 +145,6 @@ func NewPortsAddCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&serviceName, "name", "api", "service name (default: api)")
+	cmd.Flags().StringVar(&serviceName, "name", "", "service name (default: auto-detect)")
 	return cmd
 }

@@ -45,14 +45,11 @@ Portico is a Platform as a Service (PaaS) similar to Dokku, but with the followi
 
 ## Templates
 
-Portico uses template files for generating configurations:
+Portico uses embedded template files for generating configurations. Templates are included in the binary at build time:
 
-```
-templates/
-├── caddy-app.tmpl          # Individual app Caddy config
-├── docker-compose.tmpl     # Docker Compose template
-└── app.yml.tmpl            # App configuration template
-```
+- `caddy-app.tmpl` - Individual app Caddy config (used for generating Caddyfiles)
+- `docker-compose.tmpl` - Not used (docker-compose.yml is generated directly in Go)
+- `app.yml.tmpl` - Not used (app.yml is only read for backwards compatibility)
 
 ## Installation
 

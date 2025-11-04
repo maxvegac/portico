@@ -49,6 +49,10 @@ func NewAppsResetCmd() *cobra.Command {
 			// Convert app.Service to docker.Service
 			var dockerServices []docker.Service
 			for _, service := range appConfig.Services {
+				replicas := service.Replicas
+				if replicas == 0 {
+					replicas = 1 // Default to 1 if not specified
+				}
 				dockerServices = append(dockerServices, docker.Service{
 					Name:        service.Name,
 					Image:       service.Image,
@@ -58,6 +62,7 @@ func NewAppsResetCmd() *cobra.Command {
 					Volumes:     service.Volumes,
 					Secrets:     service.Secrets,
 					DependsOn:   service.DependsOn,
+					Replicas:    replicas,
 				})
 			}
 
@@ -72,7 +77,7 @@ func NewAppsResetCmd() *cobra.Command {
 			}
 
 			// Deploy the application
-			if err := dockerManager.DeployApp(appDir); err != nil {
+			if err := dockerManager.DeployApp(appDir, dockerServices); err != nil {
 				fmt.Printf("Error redeploying app: %v\n", err)
 				return
 			}

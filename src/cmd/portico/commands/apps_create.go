@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -68,7 +69,7 @@ func NewAppsCreateCmd() *cobra.Command {
 			// Create default service
 			dockerServices := []docker.Service{
 				{
-					Name:  "api",
+					Name:  "web",
 					Image: "node:22-alpine",
 					Port:  3000,
 					Environment: map[string]string{
@@ -99,6 +100,30 @@ func NewAppsCreateCmd() *cobra.Command {
 			if err := proxyManager.UpdateCaddyfile(config.AppsDir); err != nil {
 				fmt.Printf("Error updating Caddyfile: %v\n", err)
 				return
+			}
+
+			// Create git repository for the app
+			porticoHome := filepath.Dir(config.AppsDir)
+			reposDir := filepath.Join(porticoHome, "repos")
+
+			if err := os.MkdirAll(reposDir, 0o755); err == nil {
+				repoDir := filepath.Join(reposDir, appName+".git")
+
+				// Create bare repository
+				cmd := exec.Command("git", "init", "--bare", repoDir)
+				if err := cmd.Run(); err == nil {
+					// Create post-receive hook that calls portico git-receive
+					postReceiveDst := filepath.Join(repoDir, "hooks", "post-receive")
+					hookContent := "#!/bin/sh\nexec portico git-receive\n"
+
+					if err := os.WriteFile(postReceiveDst, []byte(hookContent), 0o755); err == nil {
+						hostname, _ := os.Hostname()
+						if hostname == "" {
+							hostname = "portico-server"
+						}
+						fmt.Printf("Git repository created: portico@%s:%s.git\n", hostname, appName)
+					}
+				}
 			}
 
 			fmt.Printf("Application %s created successfully!\n", appName)

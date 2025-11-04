@@ -151,6 +151,10 @@ func NewAddonLinkCmd() *cobra.Command {
 			appDir := filepath.Join(cfg.AppsDir, appName)
 			var dockerServices []docker.Service
 			for _, s := range a.Services {
+				replicas := s.Replicas
+				if replicas == 0 {
+					replicas = 1 // Default to 1 if not specified
+				}
 				dockerServices = append(dockerServices, docker.Service{
 					Name:        s.Name,
 					Image:       s.Image,
@@ -160,6 +164,7 @@ func NewAddonLinkCmd() *cobra.Command {
 					Volumes:     s.Volumes,
 					Secrets:     s.Secrets,
 					DependsOn:   s.DependsOn,
+					Replicas:    replicas,
 				})
 			}
 
@@ -173,7 +178,7 @@ func NewAddonLinkCmd() *cobra.Command {
 				return
 			}
 
-			if err := dm.DeployApp(appDir); err != nil {
+			if err := dm.DeployApp(appDir, dockerServices); err != nil {
 				fmt.Printf("Error deploying app: %v\n", err)
 				return
 			}

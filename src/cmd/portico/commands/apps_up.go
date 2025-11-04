@@ -61,6 +61,10 @@ func NewAppsUpCmd() *cobra.Command {
 			// Prepare services and metadata
 			var dockerServices []docker.Service
 			for _, service := range appConfig.Services {
+				replicas := service.Replicas
+				if replicas == 0 {
+					replicas = 1 // Default to 1 if not specified
+				}
 				dockerServices = append(dockerServices, docker.Service{
 					Name:        service.Name,
 					Image:       service.Image,
@@ -70,6 +74,7 @@ func NewAppsUpCmd() *cobra.Command {
 					Volumes:     service.Volumes,
 					Secrets:     service.Secrets,
 					DependsOn:   service.DependsOn,
+					Replicas:    replicas,
 				})
 			}
 
@@ -84,7 +89,7 @@ func NewAppsUpCmd() *cobra.Command {
 			}
 
 			// Deploy
-			if err := dm.DeployApp(appDir); err != nil {
+			if err := dm.DeployApp(appDir, dockerServices); err != nil {
 				fmt.Printf("Error starting services: %v\n", err)
 				return
 			}

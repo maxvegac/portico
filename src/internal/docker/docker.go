@@ -26,7 +26,8 @@ func NewManager(registryURL string) *Manager {
 }
 
 // DeployApp deploys an application using docker compose
-func (dm *Manager) DeployApp(appDir string) error {
+// If services have replicas > 1, uses --scale to scale them
+func (dm *Manager) DeployApp(appDir string, services []Service) error {
 	composeFile := filepath.Join(appDir, "docker-compose.yml")
 
 	// Check if docker-compose.yml exists
@@ -34,8 +35,18 @@ func (dm *Manager) DeployApp(appDir string) error {
 		return fmt.Errorf("docker-compose.yml not found in %s", appDir)
 	}
 
+	// Build docker compose command
+	args := []string{"compose", "-f", composeFile, "up", "-d"}
+
+	// Add --scale flags for services with replicas > 1
+	for _, svc := range services {
+		if svc.Replicas > 1 {
+			args = append(args, "--scale", fmt.Sprintf("%s=%d", svc.Name, svc.Replicas))
+		}
+	}
+
 	// Run docker compose up
-	cmd := exec.Command("docker", "compose", "-f", composeFile, "up", "-d")
+	cmd := exec.Command("docker", args...)
 	cmd.Dir = appDir
 
 	output, cmdErr := cmd.CombinedOutput()
@@ -313,6 +324,7 @@ type Service struct {
 	Volumes     []string
 	Secrets     []string
 	DependsOn   []string
+	Replicas    int // Number of instances (default: 1, 0 means 1)
 }
 
 // GetContainerStatus returns the status of containers for an app
