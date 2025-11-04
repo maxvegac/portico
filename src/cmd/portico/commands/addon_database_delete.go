@@ -21,11 +21,11 @@ func NewAddonDatabaseDeleteCmd() *cobra.Command {
 		Long:  "Delete a database from the specified addon instance.\n\nExample:\n  portico addon database my-postgres delete mydb",
 		Args:  cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
-			// Get addon-instance from parent command
-			addonInstanceName, err := getAddonInstanceFromArgs(cmd)
+			// Get addon-instance from parent command (addons)
+			addonInstanceName, err := getInstanceNameFromAddonsArgs(cmd)
 			if err != nil || addonInstanceName == "" {
 				fmt.Println("Error: addon-instance is required")
-				fmt.Println("Usage: portico addon database [addon-instance] delete [db-name]")
+				fmt.Println("Usage: portico addons [instance-name] database delete [db-name]")
 				return
 			}
 

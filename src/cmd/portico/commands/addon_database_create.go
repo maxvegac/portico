@@ -21,11 +21,11 @@ func NewAddonDatabaseCreateCmd() *cobra.Command {
 		Long:  "Create a new database in the specified addon instance.\n\nExample:\n  portico addon database my-postgres create mydb",
 		Args:  cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
-			// Get addon-instance from parent command
-			addonInstanceName, err := getAddonInstanceFromArgs(cmd)
+			// Get addon-instance from parent command (addons)
+			addonInstanceName, err := getInstanceNameFromAddonsArgs(cmd)
 			if err != nil || addonInstanceName == "" {
 				fmt.Println("Error: addon-instance is required")
-				fmt.Println("Usage: portico addon database [addon-instance] create [db-name]")
+				fmt.Println("Usage: portico addons [instance-name] database create [db-name]")
 				return
 			}
 
@@ -101,16 +101,4 @@ func NewAddonDatabaseCreateCmd() *cobra.Command {
 	}
 
 	return cmd
-}
-
-// getAddonInstanceFromArgs extracts addon-instance from command arguments
-func getAddonInstanceFromArgs(cmd *cobra.Command) (string, error) {
-	args := os.Args[1:]
-	for i, arg := range args {
-		if arg == "database" && i+1 < len(args) {
-			// Next argument should be the addon-instance
-			return args[i+1], nil
-		}
-	}
-	return "", fmt.Errorf("addon-instance not found")
 }

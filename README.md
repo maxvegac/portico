@@ -10,6 +10,7 @@ Portico is a Platform as a Service (PaaS) similar to Dokku, but with the followi
 - **Secrets Management**: Secure handling of sensitive data using Docker secrets
 - **Go CLI**: Command line tool for managing applications
 - **Docker Registry**: Support for external and internal registries
+- **Addon System**: Manage databases, cache stores, and tools with ease
 
 ## System Structure
 
@@ -27,6 +28,16 @@ Portico is a Platform as a Service (PaaS) similar to Dokku, but with the followi
 │           ├── database_password
 │           ├── api_key
 │           └── jwt_secret
+├── addons/
+│   ├── definitions/                # Addon definition YAMLs
+│   │   ├── postgresql.yml
+│   │   ├── mysql.yml
+│   │   ├── redis.yml
+│   │   └── ...
+│   └── instances/                   # Addon instances
+│       └── my-postgres/
+│           ├── docker-compose.yml
+│           └── data/
 ├── static/
 │   └── index.html                  # Welcome page - Catch-all
 └── config.yml
@@ -73,24 +84,165 @@ Visit http://localhost or the IP of your server to see the Portico welcome page 
 
 ## Usage
 
-### Basic Commands
+### Application Management
 
 ```bash
 # List all applications
-portico apps list
+portico list
 
 # Create new application
-portico apps create my-app
+portico create my-app
 
-# Deploy application
-portico apps deploy my-app
+# Start application
+portico up my-app
+
+# Stop application
+portico down my-app
+
+# Reset application (regenerate configs and restart)
+portico reset my-app
 
 # Destroy application
-portico apps destroy my-app
+portico destroy my-app
 
-# Show version
-portico version
+# Change to application directory
+portico cd my-app
+
+# Preserve docker-compose.yml (prevent Portico from overwriting manual changes)
+portico preserve my-app
+
+# Execute command in container
+portico exec my-app [service] [command...]
+
+# Open interactive shell in container
+portico shell my-app [service] [shell]
+
+# Show application status
+portico status my-app
 ```
+
+### Domain Management
+
+```bash
+# Add domain to application
+portico domains my-app add example.com
+
+# Remove domain from application
+portico domains my-app remove example.com
+```
+
+### Port Management
+
+```bash
+# Add port mapping
+portico ports my-app add 8080 3000 [--name service-name]
+
+# Delete port mapping
+portico ports my-app delete 8080 3000 [--name service-name]
+
+# List port mappings
+portico ports my-app list [--name service-name]
+```
+
+**Note**: If the application has only one service, the `--name` flag is optional.
+
+### Storage Management
+
+```bash
+# Add volume mount
+portico storage my-app add /host/path /container/path [--name service-name]
+
+# Delete volume mount
+portico storage my-app delete /host/path /container/path [--name service-name]
+
+# List volume mounts
+portico storage my-app list [--name service-name]
+```
+
+**Note**: If the application has only one service, the `--name` flag is optional.
+
+### Addon Management
+
+#### List Available Addons
+
+```bash
+# List all available addon types
+portico addons list
+
+# List versions for a specific addon type
+portico addons list postgresql
+```
+
+#### List Addon Instances
+
+```bash
+# List all created addon instances
+portico addons instances
+```
+
+#### Create Addon Instance
+
+```bash
+# Create shared addon instance (default)
+portico addons create my-postgres --type postgresql --version 18
+
+# Create dedicated addon instance for a specific app
+portico addons create my-db --type mysql --version 8.4.7 --mode dedicated --app my-app
+```
+
+#### Manage Addon Instances
+
+```bash
+# Start addon instance
+portico addons up my-postgres
+
+# Stop addon instance
+portico addons down my-postgres
+
+# Delete addon instance
+portico addons delete my-postgres
+```
+
+#### Add Inline Addons (Redis/Valkey)
+
+```bash
+# Add Redis as a service within an application
+portico addons add my-app redis --version 8
+
+# Add Valkey as a service within an application
+portico addons add my-app valkey --version 7.2
+```
+
+#### Link Application to Addon
+
+```bash
+# Link application to a shared or dedicated addon instance
+portico addons link my-app my-postgres
+```
+
+This automatically injects environment variables (host, port, database, user, password) into all services of the application.
+
+#### Database Management
+
+```bash
+# Create database in addon instance
+portico addons database my-postgres create mydb
+
+# Delete database from addon instance
+portico addons database my-postgres delete mydb
+
+# List databases in addon instance
+portico addons database my-postgres list
+```
+
+### Available Addons
+
+- **PostgreSQL**: Versions 15, 16, 17, 18
+- **MySQL**: Versions 5.7, 8.4.7, 9.5.0
+- **MariaDB**: Versions 10, 11, 12
+- **MongoDB**: Versions 6, 7
+- **Redis**: Versions 6, 7, 8
+- **Valkey**: Versions 7.0, 7.2
 
 ### Application Structure
 

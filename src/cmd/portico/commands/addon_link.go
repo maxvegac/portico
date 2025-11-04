@@ -19,13 +19,19 @@ func NewAddonLinkCmd() *cobra.Command {
 	var dbName string
 
 	cmd := &cobra.Command{
-		Use:   "link [app-name] [addon-instance]",
+		Use:   "link [addon-instance]",
 		Short: "Link app to addon instance",
-		Long:  "Link an application to an addon instance (database) and add connection environment variables to all services.\n\nExample:\n  portico addon link my-app my-postgres --database mydb",
-		Args:  cobra.ExactArgs(2),
-		Run: func(_ *cobra.Command, args []string) {
-			appName := args[0]
-			addonInstanceName := args[1]
+		Long:  "Link an application to an addon instance (database) and add connection environment variables to all services.\n\nExample:\n  portico addons my-app link my-postgres --database mydb",
+		Args:  cobra.ExactArgs(1),
+		Run: func(cmd *cobra.Command, args []string) {
+			// Get app-name from parent command (addons)
+			appName, err := getAppNameFromAddonsArgs(cmd)
+			if err != nil || appName == "" {
+				fmt.Println("Error: app-name is required")
+				fmt.Println("Usage: portico addons [app-name] link [addon-instance]")
+				return
+			}
+			addonInstanceName := args[0]
 
 			cfg, err := config.LoadConfig()
 			if err != nil {

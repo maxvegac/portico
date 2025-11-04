@@ -17,6 +17,9 @@ func NewAddonsCmd() *cobra.Command {
 	cmd.AddCommand(NewAddonsListCmd())
 	cmd.AddCommand(NewAddonsInstancesCmd())
 
+	// Instance management (addons [instance-name] up/down/delete)
+	cmd.AddCommand(NewAddonsInstanceCmd())
+
 	// Database management subcommand
 	databaseCmd := NewAddonDatabaseCmd()
 	databaseCmd.AddCommand(NewAddonDatabaseCreateCmd())

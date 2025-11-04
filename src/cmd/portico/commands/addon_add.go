@@ -20,13 +20,19 @@ func NewAddonAddCmd() *cobra.Command {
 	var version string
 
 	cmd := &cobra.Command{
-		Use:   "add [app-name] [addon-type]",
+		Use:   "add [addon-type]",
 		Short: "Add inline addon (redis/valkey) as service to app",
-		Long:  "Add an inline addon (redis or valkey) as a service within an application.\n\nExample:\n  portico addon add my-app redis --version 7",
-		Args:  cobra.ExactArgs(2),
-		Run: func(_ *cobra.Command, args []string) {
-			appName := args[0]
-			addonType = args[1]
+		Long:  "Add an inline addon (redis or valkey) as a service within an application.\n\nExample:\n  portico addons my-app add redis --version 7",
+		Args:  cobra.ExactArgs(1),
+		Run: func(cmd *cobra.Command, args []string) {
+			// Get app-name from parent command (addons)
+			appName, err := getAppNameFromAddonsArgs(cmd)
+			if err != nil || appName == "" {
+				fmt.Println("Error: app-name is required")
+				fmt.Println("Usage: portico addons [app-name] add [addon-type]")
+				return
+			}
+			addonType = args[0]
 
 			if addonType != "redis" && addonType != "valkey" {
 				fmt.Printf("Error: %s is not an inline addon. Only redis and valkey are supported.\n", addonType)
