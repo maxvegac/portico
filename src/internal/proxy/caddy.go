@@ -30,7 +30,7 @@ func (cm *CaddyManager) UpdateCaddyfile(appsDir string) error {
 	}
 
 	// Read static Caddyfile from embedded files
-	content, err := embed.StaticFiles.ReadFile("static/Caddyfile")
+	content, err := embed.StaticFiles.ReadFile("static/reverse-proxy/Caddyfile")
 	if err != nil {
 		return fmt.Errorf("error reading static Caddyfile from embed: %w", err)
 	}

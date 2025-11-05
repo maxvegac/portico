@@ -9,8 +9,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"text/template"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/maxvegac/portico/src/internal/config"
+	"github.com/maxvegac/portico/src/internal/embed"
 )
 
 // Manager handles Docker operations
@@ -125,7 +129,30 @@ func (dm *Manager) LoadComposeFile(appDir string) (*ComposeFile, error) {
 	return &compose, nil
 }
 
-// GenerateDockerCompose generates/updates docker-compose.yml with intelligent merge
+// TemplateService represents a service for the template
+type TemplateService struct {
+	Name        string
+	Image       string
+	Ports       []string
+	Environment map[string]string
+	Volumes     []string
+	Secrets     []string
+	DependsOn   []string
+}
+
+// TemplateSecret represents a secret for the template
+type TemplateSecret struct {
+	File string
+}
+
+// TemplateData represents data for docker-compose template
+type TemplateData struct {
+	Services []TemplateService
+	Secrets  map[string]TemplateSecret
+	XPortico *PorticoMetadata
+}
+
+// GenerateDockerCompose generates/updates docker-compose.yml with intelligent merge using template
 func (dm *Manager) GenerateDockerCompose(appDir string, services []Service, metadata *PorticoMetadata) error {
 	composeFile := filepath.Join(appDir, "docker-compose.yml")
 
@@ -140,86 +167,165 @@ func (dm *Manager) GenerateDockerCompose(appDir string, services []Service, meta
 		existing.XPortico = metadata
 	}
 
-	// Merge services: update Portico-managed services while preserving custom fields
+	// Prepare template services with merge
+	templateServices := []TemplateService{}
 	for _, svc := range services {
-		svcMap := make(map[string]interface{})
+		templateSvc := TemplateService{
+			Name:        svc.Name,
+			Image:       svc.Image,
+			Environment: svc.Environment,
+			Volumes:     svc.Volumes,
+			Secrets:     svc.Secrets,
+			DependsOn:   svc.DependsOn,
+		}
 
-		// If service exists, preserve custom fields
+		// Handle ports
+		if svc.Port > 0 {
+			templateSvc.Ports = append(templateSvc.Ports, fmt.Sprintf("%d:%d", svc.Port, svc.Port))
+		}
+		templateSvc.Ports = append(templateSvc.Ports, svc.ExtraPorts...)
+
+		// Always add secrets mount
+		templateSvc.Volumes = append(templateSvc.Volumes, "./env:/run/secrets:ro")
+
+		// If service exists, try to preserve custom fields from existing
 		if existingSvc, ok := existing.Services[svc.Name].(map[string]interface{}); ok {
-			// Copy existing fields to preserve customizations
-			for k, v := range existingSvc {
-				svcMap[k] = v
+			// Preserve custom environment variables if they exist
+			if existingEnv, ok := existingSvc["environment"].([]interface{}); ok {
+				// Merge with existing environment
+				for _, envItem := range existingEnv {
+					if envStr, ok := envItem.(string); ok {
+						parts := strings.SplitN(envStr, "=", 2)
+						if len(parts) == 2 {
+							// Only preserve if not managed by Portico
+							if _, exists := templateSvc.Environment[parts[0]]; !exists {
+								templateSvc.Environment[parts[0]] = parts[1]
+							}
+						}
+					}
+				}
+			}
+
+			// Preserve custom volumes (excluding the secrets mount)
+			if existingVolumes, ok := existingSvc["volumes"].([]interface{}); ok {
+				for _, vol := range existingVolumes {
+					if volStr, ok := vol.(string); ok {
+						// Only preserve if not the secrets mount and not in Portico-managed volumes
+						if volStr != "./env:/run/secrets:ro" && !contains(templateSvc.Volumes[:len(templateSvc.Volumes)-1], volStr) {
+							templateSvc.Volumes = append(templateSvc.Volumes[:len(templateSvc.Volumes)-1], volStr, "./env:/run/secrets:ro")
+						}
+					}
+				}
 			}
 		}
 
-		// Update Portico-managed fields
-		svcMap["image"] = svc.Image
-		svcMap["networks"] = []string{"portico-network"}
-
-		// Handle ports
-		ports := []string{}
-		if svc.Port > 0 {
-			ports = append(ports, fmt.Sprintf("%d:%d", svc.Port, svc.Port))
-		}
-		ports = append(ports, svc.ExtraPorts...)
-		svcMap["ports"] = ports
-
-		// Handle environment
-		env := []string{}
-		for k, v := range svc.Environment {
-			env = append(env, fmt.Sprintf("%s=%s", k, v))
-		}
-		svcMap["environment"] = env
-
-		// Handle volumes
-		volumes := svc.Volumes
-		volumes = append(volumes, "./env:/run/secrets:ro") // Always add secrets mount
-		svcMap["volumes"] = volumes
-
-		// Handle secrets
-		svcMap["secrets"] = svc.Secrets
-
-		// Handle depends_on
-		if len(svc.DependsOn) > 0 {
-			svcMap["depends_on"] = svc.DependsOn
-		}
-
-		existing.Services[svc.Name] = svcMap
+		templateServices = append(templateServices, templateSvc)
 	}
 
-	// Ensure networks section
-	if existing.Networks == nil {
-		existing.Networks = make(map[string]interface{})
-	}
-	existing.Networks["portico-network"] = map[string]interface{}{
-		"external": true,
-	}
-
-	// Ensure secrets section
-	if existing.Secrets == nil {
-		existing.Secrets = make(map[string]interface{})
-	}
-	// Add secrets from services
+	// Prepare secrets for template
+	templateSecrets := make(map[string]TemplateSecret)
 	for _, svc := range services {
 		for _, secret := range svc.Secrets {
-			if _, exists := existing.Secrets[secret]; !exists {
-				existing.Secrets[secret] = map[string]string{
-					"file": fmt.Sprintf("./env/%s", secret),
+			if _, exists := templateSecrets[secret]; !exists {
+				templateSecrets[secret] = TemplateSecret{
+					File: fmt.Sprintf("./env/%s", secret),
 				}
 			}
 		}
 	}
 
-	// Calculate hash BEFORE adding the hash field itself
-	// Temporarily remove hash if it exists
-	if existing.XPortico != nil {
-		existing.XPortico.Generated = ""
+	// Prepare template data
+	templateData := TemplateData{
+		Services: templateServices,
+		Secrets:  templateSecrets,
+		XPortico: existing.XPortico,
 	}
 
-	// Marshal without hash to calculate the hash
-	dataWithoutHash, err := yaml.Marshal(existing)
+	// Load template from filesystem first, then embedded files
+	// We need templatesDir - we can get it from config or use default
+	templatesDir := "/home/portico/templates" // Default, could be configurable
+	if cfg, err := config.LoadConfig(); err == nil {
+		templatesDir = cfg.TemplatesDir
+	}
+	templateDataBytes, err := embed.LoadTemplate(templatesDir, "docker-compose.tmpl")
 	if err != nil {
-		return fmt.Errorf("error marshaling docker-compose.yml: %w", err)
+		return fmt.Errorf("error reading docker-compose template: %w", err)
+	}
+
+	t, err := template.New("docker-compose").Parse(string(templateDataBytes))
+	if err != nil {
+		return fmt.Errorf("error parsing docker-compose template: %w", err)
+	}
+
+	// Generate YAML from template (without hash first)
+	templateDataWithoutHash := templateData
+	if templateDataWithoutHash.XPortico != nil {
+		templateDataWithoutHash.XPortico.Generated = ""
+	}
+
+	var bufWithoutHash bytes.Buffer
+	if err := t.Execute(&bufWithoutHash, templateDataWithoutHash); err != nil {
+		return fmt.Errorf("error executing docker-compose template: %w", err)
+	}
+
+	// Parse generated YAML to merge with existing custom fields
+	var generated ComposeFile
+	if err := yaml.Unmarshal(bufWithoutHash.Bytes(), &generated); err != nil {
+		return fmt.Errorf("error parsing generated docker-compose: %w", err)
+	}
+
+	// Merge custom fields from existing compose (fields not managed by Portico)
+	for svcName, existingSvc := range existing.Services {
+		if existingSvcMap, ok := existingSvc.(map[string]interface{}); ok {
+			// Check if this service is in generated services
+			if generatedSvc, exists := generated.Services[svcName]; exists {
+				if generatedSvcMap, ok := generatedSvc.(map[string]interface{}); ok {
+					// Preserve custom fields that are not Portico-managed
+					porticoManagedFields := map[string]bool{
+						"image":       true,
+						"ports":       true,
+						"environment": true,
+						"volumes":     true,
+						"secrets":     true,
+						"depends_on":  true,
+						"networks":    true,
+					}
+					for k, v := range existingSvcMap {
+						if !porticoManagedFields[k] {
+							generatedSvcMap[k] = v
+						}
+					}
+					generated.Services[svcName] = generatedSvcMap
+				}
+			}
+		}
+	}
+
+	// Preserve custom networks (if any other than portico-network)
+	for netName, netConfig := range existing.Networks {
+		if netName != "portico-network" {
+			if generated.Networks == nil {
+				generated.Networks = make(map[string]interface{})
+			}
+			generated.Networks[netName] = netConfig
+		}
+	}
+
+	// Set metadata
+	if generated.XPortico == nil {
+		generated.XPortico = &PorticoMetadata{}
+	}
+	if metadata != nil {
+		generated.XPortico.Domain = metadata.Domain
+		generated.XPortico.Port = metadata.Port
+	}
+
+	// Calculate hash BEFORE adding the hash field itself
+	// Temporarily remove hash if it exists
+	generated.XPortico.Generated = ""
+	dataWithoutHash, err := yaml.Marshal(generated)
+	if err != nil {
+		return fmt.Errorf("error marshaling docker-compose.yml for hash: %w", err)
 	}
 
 	// Calculate hash of content without the hash field
@@ -227,22 +333,25 @@ func (dm *Manager) GenerateDockerCompose(appDir string, services []Service, meta
 	hashStr := fmt.Sprintf("%x", hash)
 
 	// Now add the hash to metadata
-	if existing.XPortico == nil {
-		existing.XPortico = &PorticoMetadata{}
-	}
-	if metadata != nil {
-		existing.XPortico.Domain = metadata.Domain
-		existing.XPortico.Port = metadata.Port
-	}
-	existing.XPortico.Generated = hashStr
+	generated.XPortico.Generated = hashStr
 
 	// Marshal final version with hash
-	data, err := yaml.Marshal(existing)
+	finalData, err := yaml.Marshal(generated)
 	if err != nil {
-		return fmt.Errorf("error marshaling docker-compose.yml with hash: %w", err)
+		return fmt.Errorf("error marshaling final docker-compose: %w", err)
 	}
 
-	return os.WriteFile(composeFile, data, 0o644)
+	return os.WriteFile(composeFile, finalData, 0o644)
+}
+
+// contains checks if a string slice contains a value
+func contains(slice []string, value string) bool {
+	for _, v := range slice {
+		if v == value {
+			return true
+		}
+	}
+	return false
 }
 
 // GetPorticoMetadata extracts Portico metadata from docker-compose.yml

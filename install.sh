@@ -154,7 +154,7 @@ fi
 
 # Create directories
 echo -e "${BLUE}📁 Creating directories...${NC}"
-sudo mkdir -p /home/portico/{apps,reverse-proxy,static,logs,addons/definitions,addons/instances,repos,bin,.tmp}
+sudo mkdir -p /home/portico/{apps,reverse-proxy,templates,www,logs,addons/definitions,addons/instances,repos,bin,.tmp}
 sudo chown -R portico:portico /home/portico
 
 # Create Docker network

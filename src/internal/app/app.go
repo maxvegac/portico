@@ -329,8 +329,8 @@ func (am *Manager) CreateDefaultCaddyfile(name string) error {
 		domain = fmt.Sprintf("%s.localhost", name)
 	}
 
-	// Load template from embedded files
-	templateData, err := embed.Templates.ReadFile("templates/caddy-app.tmpl")
+	// Load template from filesystem first, then embedded files
+	templateData, err := embed.LoadTemplate(am.TemplatesDir, "caddy-app.tmpl")
 	if err != nil {
 		return fmt.Errorf("error reading caddy-app template: %w", err)
 	}

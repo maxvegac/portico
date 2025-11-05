@@ -11,10 +11,10 @@ import (
 func ExtractStaticFiles(targetDir string) error {
 	// Extract static files
 	staticFiles := []string{
-		"static/Caddyfile",
+		"static/reverse-proxy/Caddyfile",
 		"static/config.yml",
-		"static/docker-compose.yml",
-		"static/index.html",
+		"static/reverse-proxy/docker-compose.yml",
+		"static/www/index.html",
 	}
 
 	// Extract addon definitions
@@ -100,4 +100,25 @@ func ExtractAddonDefinition(addonType, targetDir string) error {
 	embedPath := fmt.Sprintf("static/addons/definitions/%s.yml", addonType)
 	targetPath := filepath.Join(targetDir, addonType+".yml")
 	return ExtractStaticFile(embedPath, targetPath)
+}
+
+// ExtractTemplate extracts a template file from embed to filesystem
+func ExtractTemplate(templateName, targetPath string) error {
+	embedPath := fmt.Sprintf("templates/%s", templateName)
+	content, err := Templates.ReadFile(embedPath)
+	if err != nil {
+		return fmt.Errorf("error reading %s from embed: %w", embedPath, err)
+	}
+
+	// Create target directory if needed
+	if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
+		return fmt.Errorf("error creating directory for %s: %w", targetPath, err)
+	}
+
+	// Write file
+	if err := os.WriteFile(targetPath, content, 0o644); err != nil {
+		return fmt.Errorf("error writing %s: %w", targetPath, err)
+	}
+
+	return nil
 }

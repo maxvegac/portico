@@ -46,8 +46,7 @@ func canAccessPorticoHome() bool {
 // getConfigPaths returns appropriate config paths based on execution context
 func getConfigPaths() []string {
 	paths := []string{
-		".",        // Current directory
-		"./static", // Static config in project
+		".", // Current directory
 	}
 
 	// Add system paths based on access level
