@@ -34,11 +34,19 @@ Examples:
   portico service my-app web scale 1`,
 		Args: cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
-			// Get app-name and service-name from parent command
+			// Get app-name and service-name from parent command or auto-detect
 			appName, serviceName, err := getAppAndServiceFromArgs(cmd)
 			if err != nil || appName == "" || serviceName == "" {
 				fmt.Println("Error: app-name and service-name are required")
-				fmt.Println("Usage: portico service [app-name] [service-name] scale [number]")
+				fmt.Println()
+				fmt.Println("Usage:")
+				fmt.Println("  portico service [app-name] [service-name] scale [number]")
+				fmt.Println()
+				fmt.Println("Examples:")
+				fmt.Println("  portico service my-app web scale 3")
+				fmt.Println("  portico service mail-worker worker scale 2")
+				fmt.Println()
+				fmt.Println("Note: Service-name can be auto-detected if the app has only one service.")
 				return
 			}
 

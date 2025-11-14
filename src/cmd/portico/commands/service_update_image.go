@@ -43,11 +43,19 @@ Examples:
 		Run: func(cmd *cobra.Command, args []string) {
 			imageName := args[0]
 
-			// Get app-name and service-name from parent command
+			// Get app-name and service-name from parent command or auto-detect
 			appName, serviceName, err := getAppAndServiceFromArgs(cmd)
 			if err != nil || appName == "" || serviceName == "" {
 				fmt.Println("Error: app-name and service-name are required")
-				fmt.Println("Usage: portico service [app-name] [service-name] image [image-name]")
+				fmt.Println()
+				fmt.Println("Usage:")
+				fmt.Println("  portico service [app-name] [service-name] image [image-name]")
+				fmt.Println()
+				fmt.Println("Examples:")
+				fmt.Println("  portico service my-app web image myregistry.com/my-app:v1.0.0")
+				fmt.Println("  portico service mail-worker worker image ghcr.io/user/worker:latest")
+				fmt.Println()
+				fmt.Println("Note: Service-name can be auto-detected if the app has only one service.")
 				return
 			}
 
@@ -220,41 +228,4 @@ Examples:
 	cmd.Flags().BoolVar(&noHTTPPort, "no-http-port", false, "Create a background worker without HTTP port")
 
 	return cmd
-}
-
-// getAppAndServiceFromArgs extracts app-name and service-name from service command arguments
-func getAppAndServiceFromArgs(cmd *cobra.Command) (string, string, error) {
-	args := os.Args[1:] // Skip program name
-	knownCommands := map[string]bool{
-		"image": true,
-		"scale": true,
-	}
-
-	for i, arg := range args {
-		if arg == "service" {
-			// Next non-flag argument should be app-name
-			appName := ""
-			serviceName := ""
-			for j := i + 1; j < len(args); j++ {
-				// Skip if it's a flag
-				if len(args[j]) > 0 && args[j][0] == '-' {
-					continue
-				}
-				// Skip known commands
-				if knownCommands[args[j]] {
-					continue
-				}
-				// First non-flag, non-command should be app-name
-				if appName == "" {
-					appName = args[j]
-				} else if serviceName == "" {
-					// Second should be service-name
-					serviceName = args[j]
-					break
-				}
-			}
-			return appName, serviceName, nil
-		}
-	}
-	return "", "", fmt.Errorf("app-name and service-name not found")
 }

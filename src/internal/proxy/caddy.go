@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	"github.com/maxvegac/portico/src/internal/embed"
+	"github.com/maxvegac/portico/src/internal/util"
 )
 
 // CaddyManager handles Caddy proxy configuration
@@ -39,6 +40,9 @@ func (cm *CaddyManager) UpdateCaddyfile(appsDir string) error {
 	if err := os.WriteFile(caddyfilePath, content, 0o644); err != nil {
 		return fmt.Errorf("error writing Caddyfile: %w", err)
 	}
+
+	// Fix file ownership if running as root
+	_ = util.FixFileOwnership(caddyfilePath)
 
 	return nil
 }

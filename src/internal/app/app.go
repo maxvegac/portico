@@ -12,6 +12,7 @@ import (
 
 	"github.com/maxvegac/portico/src/internal/docker"
 	"github.com/maxvegac/portico/src/internal/embed"
+	"github.com/maxvegac/portico/src/internal/util"
 )
 
 // App represents a Portico application
@@ -117,7 +118,14 @@ func (am *Manager) SaveApp(app *App) error {
 		return fmt.Errorf("error marshaling app config: %w", err)
 	}
 
-	return os.WriteFile(appFile, data, 0o600)
+	if err := os.WriteFile(appFile, data, 0o600); err != nil {
+		return err
+	}
+
+	// Fix file ownership if running as root
+	_ = util.FixFileOwnership(appFile)
+
+	return nil
 }
 
 // LoadApp loads an application configuration
@@ -404,6 +412,12 @@ func (am *Manager) CreateDefaultCaddyfile(name string) error {
 	}); err != nil {
 		return fmt.Errorf("error executing caddy-app template: %w", err)
 	}
+
+	// Close file before fixing ownership
+	file.Close()
+
+	// Fix file ownership if running as root
+	_ = util.FixFileOwnership(caddyfilePath)
 
 	return nil
 }
