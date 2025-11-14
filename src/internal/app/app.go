@@ -60,14 +60,13 @@ func (am *Manager) CreateAppDirectories(name string) error {
 		return fmt.Errorf("error creating app directory: %w", err)
 	}
 
-	// Create env directory
+	// Create env directory (for secrets, but don't create default secrets)
 	envDir := filepath.Join(appDir, "env")
 	if err := os.MkdirAll(envDir, 0o755); err != nil {
 		return fmt.Errorf("error creating env directory: %w", err)
 	}
 
-	// Create default secret files
-	return am.CreateDefaultSecrets(name)
+	return nil
 }
 
 // CreateApp creates a new application (deprecated - kept for backwards compatibility)
@@ -366,7 +365,23 @@ func (am *Manager) CreateDefaultCaddyfile(name string) error {
 		}
 	}
 
-	// If not found, use first service
+	// If not found, use first service with a port > 0
+	if mainService == nil {
+		for i := range app.Services {
+			if app.Services[i].Port > 0 {
+				mainService = &app.Services[i]
+				servicePort = app.Services[i].Port
+				break
+			}
+		}
+	}
+
+	// If still not found and app.Port is 0, this is a background worker - skip Caddyfile
+	if mainService == nil && app.Port == 0 {
+		return fmt.Errorf("no HTTP port configured for app %s (background worker, no Caddyfile needed)", name)
+	}
+
+	// If still not found, use first service (fallback)
 	if mainService == nil {
 		mainService = &app.Services[0]
 		servicePort = mainService.Port
