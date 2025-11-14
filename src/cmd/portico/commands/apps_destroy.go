@@ -33,9 +33,9 @@ func NewAppsDestroyCmd() *cobra.Command {
 			// Create app manager
 			appManager := app.NewManager(config.AppsDir, config.TemplatesDir)
 
-			// Check if app exists
+			// Check if app directory exists
 			appDir := filepath.Join(config.AppsDir, appName)
-			if _, err := appManager.LoadApp(appName); err != nil {
+			if _, err := os.Stat(appDir); os.IsNotExist(err) {
 				fmt.Printf("Error: Application '%s' does not exist\n", appName)
 				return
 			}
@@ -55,10 +55,23 @@ func NewAppsDestroyCmd() *cobra.Command {
 				}
 			}
 
-			// Delete the application
+			// Delete the application directory
 			if err := appManager.DeleteApp(appName); err != nil {
 				fmt.Printf("Error deleting application: %v\n", err)
 				return
+			}
+
+			// Delete git repository if it exists
+			porticoHome := filepath.Dir(config.AppsDir)
+			reposDir := filepath.Join(porticoHome, "repos")
+			repoDir := filepath.Join(reposDir, appName+".git")
+			if _, err := os.Stat(repoDir); err == nil {
+				fmt.Printf("Removing git repository...\n")
+				if err := os.RemoveAll(repoDir); err != nil {
+					fmt.Printf("Warning: Error removing git repository: %v\n", err)
+				} else {
+					fmt.Printf("Git repository removed successfully\n")
+				}
 			}
 
 			// Update Caddyfile
