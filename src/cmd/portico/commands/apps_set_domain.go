@@ -15,7 +15,7 @@ func NewAppsSetDomainCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "set-domain [app-name] [domain]",
 		Short: "Set application domain",
-		Long:  "Update the application's domain in app.yml, regenerate the app Caddyfile, and refresh the reverse proxy.",
+		Long:  "Update the application's domain in docker-compose.yml, regenerate the app Caddyfile, and refresh the reverse proxy.",
 		Args:  cobra.ExactArgs(2),
 		Run: func(_ *cobra.Command, args []string) {
 			appName := args[0]

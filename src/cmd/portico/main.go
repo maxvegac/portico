@@ -49,6 +49,20 @@ func main() {
 	statusCmd := commands.NewAppsStatusCmd()
 	statusCmd.Use = "status [app-name]"
 
+	// Env commands (environment variables)
+	envCmd := commands.NewEnvCmd()
+	envCmd.AddCommand(commands.NewEnvAddCmd())
+	envCmd.AddCommand(commands.NewEnvDeleteCmd())
+	envCmd.AddCommand(commands.NewEnvEditCmd())
+	envCmd.AddCommand(commands.NewEnvListCmd())
+
+	// Secrets commands (secret files)
+	secretsCmd := commands.NewSecretsCmd()
+	secretsCmd.AddCommand(commands.NewSecretsAddCmd())
+	secretsCmd.AddCommand(commands.NewSecretsDeleteCmd())
+	secretsCmd.AddCommand(commands.NewSecretsEditCmd())
+	secretsCmd.AddCommand(commands.NewSecretsListCmd())
+
 	// Domains command
 	domainsCmd := commands.NewDomainsCmd()
 	domainsCmd.AddCommand(commands.NewDomainsAddCmd())
@@ -91,6 +105,8 @@ func main() {
 	rootCmd.AddCommand(execCmd)
 	rootCmd.AddCommand(shellCmd)
 	rootCmd.AddCommand(statusCmd)
+	rootCmd.AddCommand(envCmd)
+	rootCmd.AddCommand(secretsCmd)
 	rootCmd.AddCommand(domainsCmd)
 	rootCmd.AddCommand(portsCmd)
 	rootCmd.AddCommand(storageCmd)

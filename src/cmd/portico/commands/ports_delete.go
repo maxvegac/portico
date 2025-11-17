@@ -15,8 +15,6 @@ import (
 
 // NewPortsDeleteCmd deletes a port mapping for a service in an app
 func NewPortsDeleteCmd() *cobra.Command {
-	var serviceName string
-
 	cmd := &cobra.Command{
 		Use:   "delete [external:internal|http]",
 		Short: "Delete a service port mapping or remove HTTP port",
@@ -27,9 +25,13 @@ func NewPortsDeleteCmd() *cobra.Command {
 			appName, err := getAppNameFromPortsArgs(cmd)
 			if err != nil || appName == "" {
 				fmt.Println("Error: app-name is required")
-				fmt.Println("Usage: portico ports [app-name] delete [external:internal|http]")
+				fmt.Println("Usage: portico ports [app-name] [service-name] delete [external:internal|http]")
 				return
 			}
+
+			// Get service-name from args (optional)
+			serviceName, _ := getServiceNameFromPortsArgs(cmd)
+
 			mapping := args[0]
 
 			cfg, err := config.LoadConfig()
@@ -72,8 +74,14 @@ func NewPortsDeleteCmd() *cobra.Command {
 				if len(a.Services) == 1 {
 					serviceName = a.Services[0].Name
 				} else {
-					// Use "web" as default (main service)
-					serviceName = "web"
+					var serviceNames []string
+					for _, s := range a.Services {
+						serviceNames = append(serviceNames, s.Name)
+					}
+					fmt.Printf("Error: app %s has %d services. Please specify service name\n", appName, len(a.Services))
+					fmt.Printf("Available services: %v\n", serviceNames)
+					fmt.Println("Usage: portico ports [app-name] [service-name] delete [external:internal|http]")
+					return
 				}
 			}
 
@@ -129,7 +137,7 @@ func NewPortsDeleteCmd() *cobra.Command {
 					Replicas:    replicas,
 				})
 			}
-			// Get metadata from app.yml
+			// Get metadata from docker-compose.yml
 			metadata := &docker.PorticoMetadata{
 				Domain: a.Domain,
 				Port:   a.Port,
@@ -148,6 +156,5 @@ func NewPortsDeleteCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&serviceName, "name", "", "service name (default: auto-detect)")
 	return cmd
 }

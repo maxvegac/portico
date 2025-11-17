@@ -81,6 +81,44 @@ func (dm *Manager) StopApp(appDir string) error {
 	return nil
 }
 
+// RestartApp restarts all services in an application
+func (dm *Manager) RestartApp(appDir string) error {
+	composeFile := filepath.Join(appDir, "docker-compose.yml")
+
+	if _, err := os.Stat(composeFile); os.IsNotExist(err) {
+		return fmt.Errorf("docker-compose.yml not found in %s", appDir)
+	}
+
+	cmd := exec.Command("docker", "compose", "-f", composeFile, "restart")
+	cmd.Dir = appDir
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("error restarting services: %s\n%s", err, string(output))
+	}
+
+	return nil
+}
+
+// RestartService restarts a specific service in an application
+func (dm *Manager) RestartService(appDir string, serviceName string) error {
+	composeFile := filepath.Join(appDir, "docker-compose.yml")
+
+	if _, err := os.Stat(composeFile); os.IsNotExist(err) {
+		return fmt.Errorf("docker-compose.yml not found in %s", appDir)
+	}
+
+	cmd := exec.Command("docker", "compose", "-f", composeFile, "restart", serviceName)
+	cmd.Dir = appDir
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("error restarting service %s: %s\n%s", serviceName, err, string(output))
+	}
+
+	return nil
+}
+
 // ComposeFile represents a docker-compose.yml structure with Portico metadata
 type ComposeFile struct {
 	Services map[string]interface{} `yaml:"services"`

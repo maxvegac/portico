@@ -69,7 +69,7 @@ Examples:
 			appConfig, err := appManager.LoadApp(appName)
 			serviceExists := false
 			if err != nil {
-				// App doesn't exist or has no docker-compose.yml/app.yml
+				// App doesn't exist or has no docker-compose.yml
 				// Create app directories if needed
 				appDir := filepath.Join(cfg.AppsDir, appName)
 				if _, err := os.Stat(appDir); os.IsNotExist(err) {

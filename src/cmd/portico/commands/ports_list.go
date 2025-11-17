@@ -11,8 +11,6 @@ import (
 
 // NewPortsListCmd lists port mappings for a service in an app
 func NewPortsListCmd() *cobra.Command {
-	var serviceName string
-
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List service port mappings",
@@ -23,9 +21,12 @@ func NewPortsListCmd() *cobra.Command {
 			appName, err := getAppNameFromPortsArgs(cmd)
 			if err != nil || appName == "" {
 				fmt.Println("Error: app-name is required")
-				fmt.Println("Usage: portico ports [app-name] list")
+				fmt.Println("Usage: portico ports [app-name] [service-name] list")
 				return
 			}
+
+			// Get service-name from args (optional)
+			serviceName, _ := getServiceNameFromPortsArgs(cmd)
 
 			cfg, err := config.LoadConfig()
 			if err != nil {
@@ -77,6 +78,5 @@ func NewPortsListCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&serviceName, "name", "", "service name (default: auto-detect)")
 	return cmd
 }

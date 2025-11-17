@@ -15,7 +15,7 @@ func NewDomainsAddCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "add [domain]",
 		Short: "Add domain to application",
-		Long:  "Add a domain to the application, update app.yml, regenerate the app Caddyfile, and refresh the reverse proxy.",
+		Long:  "Add a domain to the application, update docker-compose.yml, regenerate the app Caddyfile, and refresh the reverse proxy.",
 		Args:  cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
 			// Get app-name from parent command (domains)

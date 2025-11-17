@@ -8,8 +8,6 @@ import (
 	"strings"
 	"text/template"
 
-	"gopkg.in/yaml.v3"
-
 	"github.com/maxvegac/portico/src/internal/docker"
 	"github.com/maxvegac/portico/src/internal/embed"
 	"github.com/maxvegac/portico/src/internal/util"
@@ -52,7 +50,6 @@ func NewManager(appsDir, templatesDir string) *Manager {
 }
 
 // CreateAppDirectories creates app directory structure and default secrets
-// Does not create app.yml - that is now optional/legacy
 func (am *Manager) CreateAppDirectories(name string) error {
 	appDir := filepath.Join(am.AppsDir, name)
 
@@ -71,87 +68,59 @@ func (am *Manager) CreateAppDirectories(name string) error {
 }
 
 // CreateApp creates a new application (deprecated - kept for backwards compatibility)
-// Now just creates directories and secrets, app.yml is optional
+// Now just creates directories and secrets
 func (am *Manager) CreateApp(name string, port int) error {
 	return am.CreateAppDirectories(name)
 }
 
-// SaveApp saves an application configuration
-// If docker-compose.yml exists, updates it. Otherwise saves to app.yml (legacy)
+// SaveApp saves an application configuration to docker-compose.yml
 func (am *Manager) SaveApp(app *App) error {
 	appDir := filepath.Join(am.AppsDir, app.Name)
 	composeFile := filepath.Join(appDir, "docker-compose.yml")
 
-	// If docker-compose.yml exists, update it instead of app.yml
-	if _, err := os.Stat(composeFile); err == nil {
-		// Use docker manager to update compose file
-		dm := docker.NewManager("") // Registry URL not needed for updates
-
-		// Convert app services to docker services
-		var dockerServices []docker.Service
-		for _, svc := range app.Services {
-			dockerServices = append(dockerServices, docker.Service{
-				Name:        svc.Name,
-				Image:       svc.Image,
-				Port:        svc.Port,
-				ExtraPorts:  svc.ExtraPorts,
-				Environment: svc.Environment,
-				Volumes:     svc.Volumes,
-				Secrets:     svc.Secrets,
-				DependsOn:   svc.DependsOn,
-			})
-		}
-
-		// Update metadata
-		metadata := &docker.PorticoMetadata{
-			Domain: app.Domain,
-			Port:   app.Port,
-		}
-
-		return dm.GenerateDockerCompose(appDir, dockerServices, metadata)
+	// Check if docker-compose.yml exists
+	if _, err := os.Stat(composeFile); err != nil {
+		return fmt.Errorf("docker-compose.yml not found for app %s: %w", app.Name, err)
 	}
 
-	// Fallback: save to app.yml for backwards compatibility
-	appFile := filepath.Join(appDir, "app.yml")
-	data, err := yaml.Marshal(app)
-	if err != nil {
-		return fmt.Errorf("error marshaling app config: %w", err)
+	// Use docker manager to update compose file
+	dm := docker.NewManager("") // Registry URL not needed for updates
+
+	// Convert app services to docker services
+	var dockerServices []docker.Service
+	for _, svc := range app.Services {
+		dockerServices = append(dockerServices, docker.Service{
+			Name:        svc.Name,
+			Image:       svc.Image,
+			Port:        svc.Port,
+			ExtraPorts:  svc.ExtraPorts,
+			Environment: svc.Environment,
+			Volumes:     svc.Volumes,
+			Secrets:     svc.Secrets,
+			DependsOn:   svc.DependsOn,
+		})
 	}
 
-	if err := os.WriteFile(appFile, data, 0o600); err != nil {
-		return err
+	// Update metadata
+	metadata := &docker.PorticoMetadata{
+		Domain: app.Domain,
+		Port:   app.Port,
 	}
 
-	// Fix file ownership if running as root
-	_ = util.FixFileOwnership(appFile)
-
-	return nil
+	return dm.GenerateDockerCompose(appDir, dockerServices, metadata)
 }
 
-// LoadApp loads an application configuration
-// First tries to load from docker-compose.yml, falls back to app.yml if not found
+// LoadApp loads an application configuration from docker-compose.yml
 func (am *Manager) LoadApp(name string) (*App, error) {
 	appDir := filepath.Join(am.AppsDir, name)
 	composeFile := filepath.Join(appDir, "docker-compose.yml")
 
-	// Try to load from docker-compose.yml first
-	if _, err := os.Stat(composeFile); err == nil {
-		return am.LoadAppFromCompose(name)
+	// Check if docker-compose.yml exists
+	if _, err := os.Stat(composeFile); err != nil {
+		return nil, fmt.Errorf("docker-compose.yml not found for app %s: %w", name, err)
 	}
 
-	// Fallback to app.yml for backwards compatibility
-	appFile := filepath.Join(appDir, "app.yml")
-	data, err := os.ReadFile(appFile)
-	if err != nil {
-		return nil, fmt.Errorf("error reading app config: %w", err)
-	}
-
-	var app App
-	if err := yaml.Unmarshal(data, &app); err != nil {
-		return nil, fmt.Errorf("error unmarshaling app config: %w", err)
-	}
-
-	return &app, nil
+	return am.LoadAppFromCompose(name)
 }
 
 // LoadAppFromCompose loads application configuration from docker-compose.yml

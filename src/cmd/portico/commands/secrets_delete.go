@@ -2,6 +2,7 @@ package commands
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -12,34 +13,32 @@ import (
 	"github.com/maxvegac/portico/src/internal/docker"
 )
 
-// NewStorageDeleteCmd removes a volume mount from a service
-func NewStorageDeleteCmd() *cobra.Command {
+// NewSecretsDeleteCmd deletes a secret file for a service in an app
+func NewSecretsDeleteCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "delete [host-path] [container-path]",
-		Short: "Remove a volume mount",
-		Long:  "Remove a volume mount from a service in the given app. If the app has only one service, service-name is optional.\n\nArguments:\n  - host-path: Path on the host\n  - container-path: Path inside the container\n\nExample:\n  portico storage my-app delete /data/my-app/data /app/data",
-		Args:  cobra.ExactArgs(2),
+		Use:     "del [secret-name]",
+		Aliases: []string{"delete"},
+		Short:   "Delete a secret",
+		Long:    "Delete a secret file for a service in the given app.\n\nExamples:\n  portico secrets my-app del database_password\n    Deletes database_password secret (uses default service if only one exists)\n\n  portico secrets my-app api del api_key\n    Deletes api_key secret for service 'api'",
+		Args:    cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
-			// Get app-name from parent command (storage)
-			appName, err := getAppNameFromStorageArgs(cmd)
+			// Get app-name from parent command (secrets)
+			appName, err := getAppNameFromSecretsArgs(cmd)
 			if err != nil || appName == "" {
 				fmt.Println("Error: app-name is required")
-				fmt.Println("Usage: portico storage [app-name] [service-name] delete [host-path] [container-path]")
+				fmt.Println("Usage: portico secrets [app-name] [service-name] del [secret-name]")
 				return
 			}
 
 			// Get service-name from args (optional)
-			serviceName, _ := getServiceNameFromStorageArgs(cmd)
+			serviceName, _ := getServiceNameFromSecretsArgs(cmd)
 
-			hostPath := strings.TrimSpace(args[0])
-			containerPath := strings.TrimSpace(args[1])
+			secretName := strings.TrimSpace(args[0])
 
-			if hostPath == "" || containerPath == "" {
-				fmt.Println("Invalid paths")
+			if secretName == "" {
+				fmt.Println("Error: secret-name is required")
 				return
 			}
-
-			volumeMount := fmt.Sprintf("%s:%s", hostPath, containerPath)
 
 			cfg, err := config.LoadConfig()
 			if err != nil {
@@ -65,26 +64,27 @@ func NewStorageDeleteCmd() *cobra.Command {
 					}
 					fmt.Printf("Error: app %s has %d services. Please specify service name\n", appName, len(a.Services))
 					fmt.Printf("Available services: %v\n", serviceNames)
-					fmt.Println("Usage: portico storage [app-name] [service-name] delete [host-path] [container-path]")
+					fmt.Println("Usage: portico secrets [app-name] [service-name] del [secret-name]")
 					return
 				}
 			}
 
-			// Find service and remove volume
+			// Find service and remove secret
 			found := false
 			removed := false
 			for i := range a.Services {
 				if a.Services[i].Name == serviceName {
 					found = true
-					filtered := make([]string, 0, len(a.Services[i].Volumes))
-					for _, v := range a.Services[i].Volumes {
-						if v == volumeMount {
+					// Remove from Secrets list
+					filtered := make([]string, 0, len(a.Services[i].Secrets))
+					for _, s := range a.Services[i].Secrets {
+						if s == secretName {
 							removed = true
 							continue
 						}
-						filtered = append(filtered, v)
+						filtered = append(filtered, s)
 					}
-					a.Services[i].Volumes = filtered
+					a.Services[i].Secrets = filtered
 					break
 				}
 			}
@@ -93,8 +93,15 @@ func NewStorageDeleteCmd() *cobra.Command {
 				return
 			}
 			if !removed {
-				fmt.Printf("Volume mount %s not found for service %s in %s\n", volumeMount, serviceName, appName)
+				fmt.Printf("Secret %s not found for service %s in %s\n", secretName, serviceName, appName)
 				return
+			}
+
+			// Delete secret file
+			appDir := filepath.Join(cfg.AppsDir, appName)
+			secretPath := filepath.Join(appDir, "env", secretName)
+			if err := os.Remove(secretPath); err != nil && !os.IsNotExist(err) {
+				fmt.Printf("Warning: could not delete secret file: %v\n", err)
 			}
 
 			if err := am.SaveApp(a); err != nil {
@@ -104,7 +111,6 @@ func NewStorageDeleteCmd() *cobra.Command {
 
 			// Regenerate docker-compose and redeploy
 			dm := docker.NewManager(cfg.Registry.URL)
-			appDir := filepath.Join(cfg.AppsDir, appName)
 
 			var dockerServices []docker.Service
 			for _, s := range a.Services {
@@ -139,12 +145,12 @@ func NewStorageDeleteCmd() *cobra.Command {
 				return
 			}
 
-			// Restart the service to apply removed volume mount
+			// Restart the service to apply removed secret
 			if err := dm.RestartService(appDir, serviceName); err != nil {
 				fmt.Printf("Warning: could not restart service: %v\n", err)
 			}
 
-			fmt.Printf("Removed volume mount %s from service %s in %s\n", volumeMount, serviceName, appName)
+			fmt.Printf("Deleted secret %s from service %s in %s\n", secretName, serviceName, appName)
 		},
 	}
 

@@ -49,23 +49,23 @@ func NewStorageAddCmd() *cobra.Command {
 				return
 			}
 
-			// Determine service name - if only one service, use it; otherwise require service-name flag
-			var serviceName string
-			if len(a.Services) == 1 {
-				serviceName = a.Services[0].Name
-			} else {
-				// Try to get from flag or require it
-				serviceNameFlag, _ := cmd.Flags().GetString("name")
-				if serviceNameFlag == "" {
+			// Get service-name from args (optional)
+			serviceName, _ := getServiceNameFromStorageArgs(cmd)
+
+			// Auto-detect service if not specified
+			if serviceName == "" {
+				if len(a.Services) == 1 {
+					serviceName = a.Services[0].Name
+				} else {
 					var serviceNames []string
 					for _, s := range a.Services {
 						serviceNames = append(serviceNames, s.Name)
 					}
-					fmt.Printf("Error: app %s has %d services. Please specify service name with --name flag\n", appName, len(a.Services))
+					fmt.Printf("Error: app %s has %d services. Please specify service name\n", appName, len(a.Services))
 					fmt.Printf("Available services: %v\n", serviceNames)
+					fmt.Println("Usage: portico storage [app-name] [service-name] add [host-path] [container-path]")
 					return
 				}
-				serviceName = serviceNameFlag
 			}
 
 			// Find service
@@ -135,10 +135,14 @@ func NewStorageAddCmd() *cobra.Command {
 				return
 			}
 
+			// Restart the service to apply new volume mount
+			if err := dm.RestartService(appDir, serviceName); err != nil {
+				fmt.Printf("Warning: could not restart service: %v\n", err)
+			}
+
 			fmt.Printf("Added volume mount: %s -> %s for service %s in %s\n", hostPath, containerPath, serviceName, appName)
 		},
 	}
 
-	cmd.Flags().String("name", "", "service name (required if app has multiple services)")
 	return cmd
 }

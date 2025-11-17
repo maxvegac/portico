@@ -7,42 +7,43 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// NewStorageCmd is the root command for volume/storage management: storage [app-name] ...
-func NewStorageCmd() *cobra.Command {
+// NewSecretsCmd is the root command for secrets: secrets [app-name] ...
+func NewSecretsCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "storage [app-name] [service-name]",
-		Short: "Manage storage volumes",
-		Long:  "Manage storage volumes and mounts for application services.",
+		Use:   "secrets [app-name] [service-name]",
+		Short: "Manage secrets",
+		Long:  "Manage secrets (files in env/ directory) for application services.",
 		Args:  cobra.ArbitraryArgs,
 		Run: func(parentCmd *cobra.Command, args []string) {
 			// Parse os.Args directly to find subcommand
 			allArgs := os.Args[1:] // Skip program name
 			knownCommands := map[string]bool{
 				"add":    true,
-				"delete": true,
 				"del":    true,
+				"delete": true,
+				"edit":   true,
 				"list":   true,
 			}
 
 			var subcommandName string
 			var subcommandIndex int
 
-			// Find "storage" in arguments
-			storageIndex := -1
+			// Find "secrets" in arguments
+			secretsIndex := -1
 			for i, arg := range allArgs {
-				if arg == "storage" {
-					storageIndex = i
+				if arg == "secrets" {
+					secretsIndex = i
 					break
 				}
 			}
 
-			if storageIndex == -1 {
+			if secretsIndex == -1 {
 				_ = parentCmd.Help()
 				return
 			}
 
-			// Find subcommand after "storage"
-			for i := storageIndex + 1; i < len(allArgs); i++ {
+			// Find subcommand after "secrets"
+			for i := secretsIndex + 1; i < len(allArgs); i++ {
 				if knownCommands[allArgs[i]] {
 					subcommandName = allArgs[i]
 					subcommandIndex = i
@@ -94,13 +95,13 @@ func NewStorageCmd() *cobra.Command {
 	return cmd
 }
 
-// getAppNameFromStorageArgs extracts app-name from storage command arguments
-// It parses os.Args to find the app-name after "storage"
-func getAppNameFromStorageArgs(cmd *cobra.Command) (string, error) {
-	// Parse os.Args to find app-name after "storage"
+// getAppNameFromSecretsArgs extracts app-name from secrets command arguments
+// It parses os.Args to find the app-name after "secrets"
+func getAppNameFromSecretsArgs(cmd *cobra.Command) (string, error) {
+	// Parse os.Args to find app-name after "secrets"
 	args := os.Args[1:] // Skip program name
 	for i, arg := range args {
-		if arg == "storage" {
+		if arg == "secrets" {
 			// Next non-flag argument should be app-name
 			for j := i + 1; j < len(args); j++ {
 				// Skip if it's a flag
@@ -108,7 +109,7 @@ func getAppNameFromStorageArgs(cmd *cobra.Command) (string, error) {
 					continue
 				}
 				// Skip known subcommands
-				if args[j] == "add" || args[j] == "delete" || args[j] == "list" {
+				if args[j] == "add" || args[j] == "del" || args[j] == "delete" || args[j] == "edit" || args[j] == "list" {
 					continue
 				}
 				// This should be the app-name
@@ -120,13 +121,13 @@ func getAppNameFromStorageArgs(cmd *cobra.Command) (string, error) {
 	return "", nil
 }
 
-// getServiceNameFromStorageArgs extracts service-name from storage command arguments
-// It parses os.Args to find the service-name after "storage" and app-name
-func getServiceNameFromStorageArgs(cmd *cobra.Command) (string, error) {
-	// Parse os.Args to find service-name after "storage" and app-name
+// getServiceNameFromSecretsArgs extracts service-name from secrets command arguments
+// It parses os.Args to find the service-name after "secrets" and app-name
+func getServiceNameFromSecretsArgs(cmd *cobra.Command) (string, error) {
+	// Parse os.Args to find service-name after "secrets" and app-name
 	args := os.Args[1:] // Skip program name
 	for i, arg := range args {
-		if arg == "storage" {
+		if arg == "secrets" {
 			// Find app-name first
 			appNameFound := false
 			for j := i + 1; j < len(args); j++ {
@@ -135,7 +136,7 @@ func getServiceNameFromStorageArgs(cmd *cobra.Command) (string, error) {
 					continue
 				}
 				// Skip known subcommands
-				if args[j] == "add" || args[j] == "delete" || args[j] == "del" || args[j] == "list" {
+				if args[j] == "add" || args[j] == "del" || args[j] == "delete" || args[j] == "edit" || args[j] == "list" {
 					continue
 				}
 				if !appNameFound {
