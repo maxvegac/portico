@@ -61,9 +61,10 @@ func NewSetHttpServiceCmd() *cobra.Command {
 				return
 			}
 
+			// If service has no port configured, assign a default port (8000)
 			if targetService.Port == 0 {
-				fmt.Printf("Error: service '%s' has no port configured. Set a port first.\n", serviceName)
-				return
+				targetService.Port = 8000
+				fmt.Printf("Service '%s' had no port configured, assigned default port 8000\n", serviceName)
 			}
 
 			// Set this service as HTTP service
