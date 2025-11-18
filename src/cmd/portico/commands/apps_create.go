@@ -88,6 +88,35 @@ Examples:
 				}
 			}
 
+			appDir := filepath.Join(config.AppsDir, appName)
+
+			// Create basic app config (always, even without services)
+			appHTTPPort := 8080
+			if noHTTPPort {
+				appHTTPPort = 0
+			}
+
+			appConfig := &app.App{
+				Name:     appName,
+				Domain:   fmt.Sprintf("%s.localhost", appName),
+				Port:     appHTTPPort,
+				Services: []app.Service{},
+			}
+
+			// Generate docker-compose.yml with basic structure (even without services)
+			dockerManager := docker.NewManager(config.Registry.URL)
+			dockerServices := []docker.Service{}
+
+			metadata := &docker.PorticoMetadata{
+				Domain: appConfig.Domain,
+				Port:   appConfig.Port,
+			}
+
+			if err := dockerManager.GenerateDockerCompose(appDir, dockerServices, metadata); err != nil {
+				fmt.Printf("Error generating docker compose: %v\n", err)
+				return
+			}
+
 			// If --with-service flag is provided, create the service
 			if withService != "" {
 				if image == "" {
@@ -95,11 +124,8 @@ Examples:
 					return
 				}
 
-				appDir := filepath.Join(config.AppsDir, appName)
-
 				// Determine service port
 				svcPort := 3000
-				appHTTPPort := 8080
 				if noHTTPPort {
 					svcPort = 0
 					appHTTPPort = 0
@@ -107,17 +133,13 @@ Examples:
 					svcPort = servicePort
 				}
 
-				// Create app config with service
-				appConfig := &app.App{
-					Name:   appName,
-					Domain: fmt.Sprintf("%s.localhost", appName),
-					Port:   appHTTPPort,
-					Services: []app.Service{
-						{
-							Name:  withService,
-							Image: image,
-							Port:  svcPort,
-						},
+				// Update app config with service
+				appConfig.Port = appHTTPPort
+				appConfig.Services = []app.Service{
+					{
+						Name:  withService,
+						Image: image,
+						Port:  svcPort,
 					},
 				}
 
@@ -127,9 +149,8 @@ Examples:
 					return
 				}
 
-				// Generate docker-compose.yml
-				dockerManager := docker.NewManager(config.Registry.URL)
-				dockerServices := []docker.Service{
+				// Generate docker-compose.yml with service
+				dockerServices = []docker.Service{
 					{
 						Name:        withService,
 						Image:       image,
@@ -142,7 +163,7 @@ Examples:
 					},
 				}
 
-				metadata := &docker.PorticoMetadata{
+				metadata = &docker.PorticoMetadata{
 					Domain: appConfig.Domain,
 					Port:   appConfig.Port,
 				}

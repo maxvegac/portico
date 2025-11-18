@@ -382,8 +382,10 @@ func (am *Manager) CreateDefaultCaddyfile(name string) error {
 		return fmt.Errorf("error executing caddy-app template: %w", err)
 	}
 
-	// Close file before fixing ownership
-	file.Close()
+	// Close file explicitly before fixing ownership (defer will handle if this fails)
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("error closing Caddyfile: %w", err)
+	}
 
 	// Fix file ownership if running as root
 	_ = util.FixFileOwnership(caddyfilePath)
