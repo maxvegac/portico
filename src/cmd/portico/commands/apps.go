@@ -20,7 +20,6 @@ func NewAppsCmd() *cobra.Command {
 	cmd.AddCommand(NewAppsUpCmd())
 	cmd.AddCommand(NewAppsDownCmd())
 	cmd.AddCommand(NewAppsSetDomainCmd())
-	cmd.AddCommand(NewAppsSetCmd())
 	// Top-level ports command (not used anymore, but kept for backwards compatibility)
 	ports := NewPortsCmd()
 	ports.AddCommand(NewPortsAddCmd())

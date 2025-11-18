@@ -2,7 +2,6 @@ package commands
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 
 	"github.com/spf13/cobra"
@@ -10,22 +9,21 @@ import (
 	"github.com/maxvegac/portico/src/internal/app"
 	"github.com/maxvegac/portico/src/internal/config"
 	"github.com/maxvegac/portico/src/internal/docker"
-	"github.com/maxvegac/portico/src/internal/proxy"
 )
 
 // NewPortsDeleteCmd deletes a port mapping for a service in an app
 func NewPortsDeleteCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "delete [external:internal|http]",
-		Short: "Delete a service port mapping or remove HTTP port",
-		Long:  "Delete a service port mapping in the given app (default service: auto-detected), or use 'http' to remove the HTTP port (disables Caddy proxy for this app).",
+		Use:   "delete [external:internal]",
+		Short: "Delete a service port mapping",
+		Long:  "Delete a service port mapping (exposed port) in the given app.\n\nNote: To disable HTTP/Caddy proxy, use 'portico set <app-name> http off'",
 		Args:  cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
 			// Get app-name from parent command (ports)
 			appName, err := getAppNameFromPortsArgs(cmd)
 			if err != nil || appName == "" {
 				fmt.Println("Error: app-name is required")
-				fmt.Println("Usage: portico ports [app-name] [service-name] delete [external:internal|http]")
+				fmt.Println("Usage: portico ports [app-name] [service-name] delete [external:internal]")
 				return
 			}
 
@@ -47,28 +45,6 @@ func NewPortsDeleteCmd() *cobra.Command {
 				return
 			}
 
-			// Special case: remove HTTP port (set to 0 to disable Caddy proxy)
-			if mapping == "http" {
-				a.Port = 0
-				if err := am.SaveApp(a); err != nil {
-					fmt.Printf("Error saving app: %v\n", err)
-					return
-				}
-				// Remove app Caddyfile since there's no HTTP port
-				appDir := filepath.Join(cfg.AppsDir, appName)
-				caddyfilePath := filepath.Join(appDir, "Caddyfile")
-				if err := os.Remove(caddyfilePath); err != nil && !os.IsNotExist(err) {
-					fmt.Printf("Warning: could not remove app Caddyfile: %v\n", err)
-				}
-				pm := proxy.NewCaddyManager(cfg.ProxyDir, cfg.TemplatesDir)
-				if err := pm.UpdateCaddyfile(cfg.AppsDir); err != nil {
-					fmt.Printf("Error updating proxy Caddyfile: %v\n", err)
-					return
-				}
-				fmt.Printf("HTTP port removed for %s (Caddy proxy disabled)\n", appName)
-				return
-			}
-
 			// Auto-detect service if not specified
 			if serviceName == "" {
 				if len(a.Services) == 1 {
@@ -80,7 +56,7 @@ func NewPortsDeleteCmd() *cobra.Command {
 					}
 					fmt.Printf("Error: app %s has %d services. Please specify service name\n", appName, len(a.Services))
 					fmt.Printf("Available services: %v\n", serviceNames)
-					fmt.Println("Usage: portico ports [app-name] [service-name] delete [external:internal|http]")
+					fmt.Println("Usage: portico ports [app-name] [service-name] delete [external:internal]")
 					return
 				}
 			}

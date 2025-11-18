@@ -17,9 +17,28 @@ import (
 func NewPortsAddCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "add [internal-port] [external-port]",
-		Short: "Add a service port mapping",
-		Long:  "Add a port mapping for a service in the given app.\n\nArguments order:\n  - internal-port: Port inside the container\n  - external-port: Port on the host (cannot be 80 or 443, reserved for Caddy)\n\nExamples:\n  portico ports my-app add 3000 8080\n    Maps host port 8080 to container port 3000 (default service: auto-detected)\n\n  portico ports my-app api add 5432 5433\n    Maps host port 5433 to container port 5432 for service 'api'",
-		Args:  cobra.ExactArgs(2),
+		Short: "Expose a service port to the host",
+		Long: `Expose a service port to the host for direct access.
+
+By default, services communicate via internal Docker network (DNS). Ports are only
+exposed to the host when explicitly added using this command.
+
+This is useful for:
+  - Debugging: access services directly without going through Caddy
+  - Databases: direct access from external tools
+  - Non-HTTP services: APIs, WebSockets, etc.
+
+Note: To configure HTTP port (used by Caddy), use 'portico set <app-name> http-port <port>'
+
+Examples:
+  # Expose database port to host
+  portico ports my-app db add 5432 5433
+    Maps host port 5433 to container port 5432 (access via localhost:5433)
+
+  # Expose API port for debugging (bypassing Caddy)
+  portico ports my-app api add 3000 8080
+    Access API directly at localhost:8080 (in addition to Caddy proxy)`,
+		Args: cobra.ExactArgs(2),
 		Run: func(cmd *cobra.Command, args []string) {
 			// Get app-name from parent command (ports)
 			appName, err := getAppNameFromPortsArgs(cmd)
@@ -36,18 +55,26 @@ func NewPortsAddCmd() *cobra.Command {
 			external := strings.TrimSpace(args[1])
 
 			if internal == "" || external == "" {
-				fmt.Println("Invalid ports")
+				fmt.Println("Error: both internal and external ports are required")
+				fmt.Println("Usage: portico ports [app-name] [service-name] add [internal-port] [external-port]")
+				return
+			}
+
+			// Validate internal port
+			internalPort, err := strconv.Atoi(internal)
+			if err != nil || internalPort <= 0 || internalPort > 65535 {
+				fmt.Println("Error: invalid internal port")
 				return
 			}
 
 			// Validate external port - cannot be 80 or 443 (reserved for Caddy)
 			externalPort, err := strconv.Atoi(external)
 			if err != nil || externalPort <= 0 || externalPort > 65535 {
-				fmt.Println("Invalid external port")
+				fmt.Println("Error: invalid external port")
 				return
 			}
 			if externalPort == 80 || externalPort == 443 {
-				fmt.Println("Ports 80 and 443 are reserved for Caddy proxy. Use 'service http' to configure HTTP routing.")
+				fmt.Println("Error: ports 80 and 443 are reserved for Caddy proxy")
 				return
 			}
 
@@ -80,11 +107,14 @@ func NewPortsAddCmd() *cobra.Command {
 				}
 			}
 
-			mapping := external + ":" + internal
-
 			found := false
 			for i := range a.Services {
 				if a.Services[i].Name == serviceName {
+					found = true
+
+					// Add extra port mapping (expose to host)
+					mapping := external + ":" + internal
+
 					// ensure unique
 					exists := false
 					for _, m := range a.Services[i].ExtraPorts {
@@ -98,7 +128,7 @@ func NewPortsAddCmd() *cobra.Command {
 						return
 					}
 					a.Services[i].ExtraPorts = append(a.Services[i].ExtraPorts, mapping)
-					found = true
+					fmt.Printf("Exposed port: host port %s -> container port %s for service %s in %s\n", external, internal, serviceName, appName)
 					break
 				}
 			}
@@ -148,8 +178,6 @@ func NewPortsAddCmd() *cobra.Command {
 				fmt.Printf("Error deploying app: %v\n", err)
 				return
 			}
-
-			fmt.Printf("Added port mapping: host port %s -> container port %s for service %s in %s\n", external, internal, serviceName, appName)
 		},
 	}
 

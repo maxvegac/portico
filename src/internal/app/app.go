@@ -323,7 +323,8 @@ func (am *Manager) CreateDefaultCaddyfile(name string) error {
 	}
 	defer func() { _ = file.Close() }()
 
-	// Find the main service (the one with HTTP port, or first service if only one)
+	// Find the HTTP service by matching app.Port (http_port) with service port
+	// This allows any service to be the HTTP service, not just "web"
 	var mainService *Service
 	var servicePort int
 
@@ -331,40 +332,36 @@ func (am *Manager) CreateDefaultCaddyfile(name string) error {
 		return fmt.Errorf("no services found in app %s", name)
 	}
 
-	// Try to find service with port matching app.Port (HTTP port)
-	if app.Port > 0 {
-		for i := range app.Services {
-			if app.Services[i].Port == app.Port {
-				mainService = &app.Services[i]
-				servicePort = app.Port
-				break
-			}
+	// If app.Port is 0, this is a background worker - skip Caddyfile
+	if app.Port == 0 {
+		return fmt.Errorf("no HTTP port configured for app %s (background worker, no Caddyfile needed)", name)
+	}
+
+	// Find service with port matching app.Port (http_port)
+	for i := range app.Services {
+		if app.Services[i].Port == app.Port {
+			mainService = &app.Services[i]
+			servicePort = app.Port
+			break
 		}
 	}
 
-	// If not found, use first service with a port > 0
+	// If no service found with matching port, try to find first service with a port > 0
 	if mainService == nil {
 		for i := range app.Services {
 			if app.Services[i].Port > 0 {
 				mainService = &app.Services[i]
 				servicePort = app.Services[i].Port
+				// Update app.Port to match the service port
+				app.Port = servicePort
 				break
 			}
 		}
 	}
 
-	// If still not found and app.Port is 0, this is a background worker - skip Caddyfile
-	if mainService == nil && app.Port == 0 {
-		return fmt.Errorf("no HTTP port configured for app %s (background worker, no Caddyfile needed)", name)
-	}
-
-	// If still not found, use first service (fallback)
+	// If still not found, this is a background worker
 	if mainService == nil {
-		mainService = &app.Services[0]
-		servicePort = mainService.Port
-		if servicePort == 0 {
-			servicePort = 8080
-		}
+		return fmt.Errorf("no service with HTTP port %d found in app %s (background worker, no Caddyfile needed)", app.Port, name)
 	}
 
 	// Execute template

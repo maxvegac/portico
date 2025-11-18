@@ -41,20 +41,53 @@ func NewPortsListCmd() *cobra.Command {
 				return
 			}
 
+			// Find HTTP service by matching app.Port with service port
+			var httpService *app.Service
+			if a.Port > 0 {
+				for i := range a.Services {
+					if a.Services[i].Port == a.Port {
+						httpService = &a.Services[i]
+						break
+					}
+				}
+			}
+
+			// Show HTTP port and service name if HTTP service exists
+			if httpService != nil {
+				fmt.Printf("HTTP service: %s (port: %d, used by Caddy)\n", httpService.Name, a.Port)
+				fmt.Println()
+			} else if a.Port > 0 {
+				fmt.Printf("HTTP port configured: %d, but no service found with this port\n", a.Port)
+				fmt.Println()
+			} else {
+				fmt.Println("App type: Background worker (no HTTP port configured)")
+				fmt.Println()
+			}
+
+			// If no services exist
+			if len(a.Services) == 0 {
+				fmt.Println("No services found in this app.")
+				return
+			}
+
 			// Auto-detect service if not specified
 			if serviceName == "" {
 				if len(a.Services) == 1 {
 					serviceName = a.Services[0].Name
 				} else {
-					// Use "web" as default (main service)
-					serviceName = "web"
+					// Multiple services - show all instead of assuming "web"
+					fmt.Println("Available services:")
+					for _, s := range a.Services {
+						fmt.Printf("  - %s (port: %d)\n", s.Name, s.Port)
+					}
+					fmt.Println()
+					fmt.Println("To list ports for a specific service, use:")
+					fmt.Printf("  portico ports %s <service-name> list\n", appName)
+					return
 				}
 			}
 
-			// Show HTTP port (app level)
-			fmt.Printf("App HTTP port (Caddy proxy): %d\n", a.Port)
-			fmt.Println()
-
+			// Find and display the specified service
 			found := false
 			for _, s := range a.Services {
 				if s.Name == serviceName {
@@ -72,8 +105,14 @@ func NewPortsListCmd() *cobra.Command {
 					break
 				}
 			}
+
 			if !found {
-				fmt.Printf("Service %s not found in app %s\n", serviceName, appName)
+				fmt.Printf("Error: Service '%s' not found in app '%s'\n", serviceName, appName)
+				fmt.Println()
+				fmt.Println("Available services:")
+				for _, s := range a.Services {
+					fmt.Printf("  - %s (port: %d)\n", s.Name, s.Port)
+				}
 			}
 		},
 	}

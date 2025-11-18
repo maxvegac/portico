@@ -48,6 +48,11 @@ func main() {
 	shellCmd.Use = "shell [app-name] [[service] [shell]]"
 	statusCmd := commands.NewAppsStatusCmd()
 	statusCmd.Use = "status [app-name]"
+	setCmd := commands.NewSetCmd()
+	setCmd.Use = "set [app-name] [property] [value]"
+	setCmd.AddCommand(commands.NewSetHttpPortCmd())
+	setCmd.AddCommand(commands.NewSetHttpServiceCmd())
+	setCmd.AddCommand(commands.NewSetHttpCmd())
 
 	// Env commands (environment variables)
 	envCmd := commands.NewEnvCmd()
@@ -105,6 +110,7 @@ func main() {
 	rootCmd.AddCommand(execCmd)
 	rootCmd.AddCommand(shellCmd)
 	rootCmd.AddCommand(statusCmd)
+	rootCmd.AddCommand(setCmd)
 	rootCmd.AddCommand(envCmd)
 	rootCmd.AddCommand(secretsCmd)
 	rootCmd.AddCommand(domainsCmd)
