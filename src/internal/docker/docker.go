@@ -40,8 +40,18 @@ func (dm *Manager) DeployApp(appDir string, services []Service) error {
 		return fmt.Errorf("docker-compose.yml not found in %s", appDir)
 	}
 
-	// Build docker compose command
-	args := []string{"compose", "-f", composeFile, "up", "-d"}
+	// Extract app name from directory to ensure consistent project naming
+	// Docker Compose uses project name as prefix for service names (e.g., myapp-web)
+	appName := filepath.Base(appDir)
+
+	// Ensure portico-network exists before deploying
+	if err := dm.ensureNetworkExists("portico-network"); err != nil {
+		return fmt.Errorf("error ensuring portico-network exists: %w", err)
+	}
+
+	// Build docker compose command with explicit project name
+	// This ensures services are named consistently: appname-servicename
+	args := []string{"compose", "-f", composeFile, "-p", appName, "up", "-d"}
 
 	// Add --scale flags for services with replicas > 1
 	for _, svc := range services {
@@ -70,7 +80,10 @@ func (dm *Manager) StopApp(appDir string) error {
 		return fmt.Errorf("docker-compose.yml not found in %s", appDir)
 	}
 
-	cmd := exec.Command("docker", "compose", "-f", composeFile, "down")
+	// Extract app name from directory for consistent project naming
+	appName := filepath.Base(appDir)
+
+	cmd := exec.Command("docker", "compose", "-f", composeFile, "-p", appName, "down")
 	cmd.Dir = appDir
 
 	output, err := cmd.CombinedOutput()
@@ -89,7 +102,10 @@ func (dm *Manager) RestartApp(appDir string) error {
 		return fmt.Errorf("docker-compose.yml not found in %s", appDir)
 	}
 
-	cmd := exec.Command("docker", "compose", "-f", composeFile, "restart")
+	// Extract app name from directory for consistent project naming
+	appName := filepath.Base(appDir)
+
+	cmd := exec.Command("docker", "compose", "-f", composeFile, "-p", appName, "restart")
 	cmd.Dir = appDir
 
 	output, err := cmd.CombinedOutput()
@@ -108,7 +124,10 @@ func (dm *Manager) RestartService(appDir string, serviceName string) error {
 		return fmt.Errorf("docker-compose.yml not found in %s", appDir)
 	}
 
-	cmd := exec.Command("docker", "compose", "-f", composeFile, "restart", serviceName)
+	// Extract app name from directory for consistent project naming
+	appName := filepath.Base(appDir)
+
+	cmd := exec.Command("docker", "compose", "-f", composeFile, "-p", appName, "restart", serviceName)
 	cmd.Dir = appDir
 
 	output, err := cmd.CombinedOutput()
@@ -218,10 +237,9 @@ func (dm *Manager) GenerateDockerCompose(appDir string, services []Service, meta
 			DependsOn:   svc.DependsOn,
 		}
 
-		// Handle ports
-		if svc.Port > 0 {
-			templateSvc.Ports = append(templateSvc.Ports, fmt.Sprintf("%d:%d", svc.Port, svc.Port))
-		}
+		// Handle ports - only expose ports explicitly added via ExtraPorts
+		// Services communicate via internal DNS (service name) on portico-network
+		// No need to expose ports to host for web services (Caddy uses internal DNS)
 		templateSvc.Ports = append(templateSvc.Ports, svc.ExtraPorts...)
 
 		// Always add secrets mount
@@ -493,7 +511,9 @@ func (dm *Manager) GetContainerStatus(appDir string) ([]ContainerStatus, error) 
 	}
 
 	composeFile := filepath.Join(appDir, "docker-compose.yml")
-	cmd := exec.Command("docker", "compose", "-f", composeFile, "ps", "--format", "json")
+	// Extract app name from directory for consistent project naming
+	appName := filepath.Base(appDir)
+	cmd := exec.Command("docker", "compose", "-f", composeFile, "-p", appName, "ps", "--format", "json")
 	cmd.Dir = appDir
 
 	output, err := cmd.Output()
@@ -522,4 +542,23 @@ func (dm *Manager) GetContainerStatus(appDir string) ([]ContainerStatus, error) 
 type ContainerStatus struct {
 	Name   string
 	Status string
+}
+
+// ensureNetworkExists ensures that a Docker network exists, creating it if necessary
+func (dm *Manager) ensureNetworkExists(networkName string) error {
+	// Check if network exists
+	cmd := exec.Command("docker", "network", "inspect", networkName)
+	if err := cmd.Run(); err == nil {
+		// Network exists
+		return nil
+	}
+
+	// Network doesn't exist, create it
+	createCmd := exec.Command("docker", "network", "create", networkName)
+	output, err := createCmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("error creating network %s: %s\n%s", networkName, err, string(output))
+	}
+
+	return nil
 }

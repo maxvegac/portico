@@ -3,7 +3,8 @@
 
 {{.Domain}} {
     # Reverse proxy to backend service
-    reverse_proxy {{.ServiceName}}:{{.Port}}
+    # Use appname-servicename format for DNS resolution in Docker network
+    reverse_proxy {{.AppName}}-{{.ServiceName}}:{{.Port}}
     
     # Logging
     log {
