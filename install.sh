@@ -154,8 +154,17 @@ fi
 
 # Create directories
 echo -e "${BLUE}📁 Creating directories...${NC}"
-sudo mkdir -p /home/portico/{apps,reverse-proxy,templates,www,logs,addons/definitions,addons/instances,repos,bin,.tmp}
+sudo mkdir -p /home/portico/{apps,reverse-proxy,templates,www,logs/apps,addons/definitions,addons/instances,repos,bin,.tmp}
 sudo chown -R portico:portico /home/portico
+
+# Create symbolic link for Docker container logs
+echo -e "${BLUE}🔗 Creating symbolic link for Docker container logs...${NC}"
+if [ ! -L /home/portico/logs/containers ]; then
+    sudo ln -sf /var/lib/docker/containers /home/portico/logs/containers
+    echo -e "${GREEN}✅ Created symbolic link: /home/portico/logs/containers -> /var/lib/docker/containers${NC}"
+else
+    echo -e "${GREEN}✅ Symbolic link already exists${NC}"
+fi
 
 # Create Docker network
 echo -e "${BLUE}🐳 Creating Docker network...${NC}"

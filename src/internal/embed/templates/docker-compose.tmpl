@@ -19,12 +19,16 @@ services:
       - {{$key}}={{$value}}
 {{- end}}
 {{- end}}
-{{- if .Volumes}}
     volumes:
+{{- if .Volumes}}
 {{- range .Volumes}}
       - {{.}}
 {{- end}}
 {{- end}}
+      # Mount logs directory for application logs (if app writes to /app/logs or similar)
+      # Docker container logs (stdout/stderr) are still in /var/lib/docker/containers/
+      # To access container logs: docker logs <container-name>
+      - /home/portico/logs/apps/{{$.AppName}}/{{.Name}}:/app/logs:rw
 {{- if .Secrets}}
     secrets:
 {{- range .Secrets}}
@@ -37,6 +41,12 @@ services:
       - {{.}}
 {{- end}}
 {{- end}}
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+        tag: "{{$.AppName}}-{{.Name}}"
     networks:
       - portico-network
 {{end}}

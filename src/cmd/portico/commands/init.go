@@ -2,6 +2,7 @@ package commands
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 
 	"github.com/spf13/cobra"
@@ -95,6 +96,29 @@ Templates can be customized by editing files in /home/portico/templates/`,
 				if err := embed.ExtractAddonDefinition(addonType, addonsDir); err != nil {
 					// Not all addons might exist, so we just warn
 					fmt.Printf("Warning: could not extract %s definition: %v\n", addonType, err)
+				}
+			}
+
+			// Create logs/apps directory if it doesn't exist
+			logsAppsDir := filepath.Join(cfg.PorticoHome, "logs", "apps")
+			if err := os.MkdirAll(logsAppsDir, 0o755); err != nil {
+				fmt.Printf("Warning: could not create logs/apps directory: %v\n", err)
+			}
+
+			// Create symbolic link for Docker container logs
+			containersLink := filepath.Join(cfg.PorticoHome, "logs", "containers")
+			if _, err := os.Lstat(containersLink); os.IsNotExist(err) {
+				// Link doesn't exist, create it
+				if err := os.Symlink("/var/lib/docker/containers", containersLink); err != nil {
+					fmt.Printf("Warning: could not create symbolic link for Docker container logs: %v\n", err)
+					fmt.Printf("  You can create it manually with: ln -sf /var/lib/docker/containers %s\n", containersLink)
+				} else {
+					fmt.Printf("✅ Created symbolic link: %s -> /var/lib/docker/containers\n", containersLink)
+				}
+			} else {
+				// Link exists, check if it's valid
+				if _, err := os.Readlink(containersLink); err != nil {
+					fmt.Printf("Warning: %s exists but is not a valid symbolic link\n", containersLink)
 				}
 			}
 

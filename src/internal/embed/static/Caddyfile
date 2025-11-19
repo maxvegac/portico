@@ -16,7 +16,7 @@ import /home/portico/apps/*/Caddyfile
     }
 
     log {
-        output file /var/log/caddy/portico.log
+        output file /home/portico/logs/caddy.log
         format json
     }
 }

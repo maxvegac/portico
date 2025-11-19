@@ -1,9 +1,12 @@
 package app
 
 import (
+	"bufio"
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"text/template"
@@ -311,11 +314,71 @@ func (am *Manager) DeleteApp(name string) error {
 	return os.RemoveAll(appDir)
 }
 
-// CreateDefaultCaddyfile creates a default Caddyfile for an application
-// Reads directly from docker-compose.yml (single source of truth)
-func (am *Manager) CreateDefaultCaddyfile(name string) error {
+// DetectCaddyfileChanges checks if Caddyfile was manually modified
+// by comparing its current hash with the stored hash in comment
+func (am *Manager) DetectCaddyfileChanges(name string) (bool, error) {
 	appDir := filepath.Join(am.AppsDir, name)
 	caddyfilePath := filepath.Join(appDir, "Caddyfile")
+
+	// Read current Caddyfile
+	currentData, err := os.ReadFile(caddyfilePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil // No Caddyfile = not manually modified
+		}
+		return false, err
+	}
+
+	// Extract stored hash from comment
+	hashRegex := regexp.MustCompile(`# Portico Generated - Hash: ([a-f0-9]+)`)
+	matches := hashRegex.FindStringSubmatch(string(currentData))
+	if len(matches) < 2 {
+		// No hash found, likely manually created/modified
+		return true, nil
+	}
+	storedHash := matches[1]
+
+	// Remove hash comment for comparison
+	contentWithoutHash := hashRegex.ReplaceAllString(string(currentData), "")
+
+	// Calculate hash of current content (without hash comment)
+	hash := sha256.Sum256([]byte(contentWithoutHash))
+	currentHashStr := fmt.Sprintf("%x", hash)
+
+	// If stored hash doesn't match current hash, file was manually modified
+	return currentHashStr != storedHash, nil
+}
+
+// CreateDefaultCaddyfile creates a default Caddyfile for an application
+// Reads directly from docker-compose.yml (single source of truth)
+// Always regenerates the Caddyfile, but warns if manual changes are detected
+func (am *Manager) CreateDefaultCaddyfile(name string) error {
+	return am.CreateDefaultCaddyfileWithPrompt(name, false)
+}
+
+// CreateDefaultCaddyfileWithPrompt creates/updates Caddyfile with optional prompt for confirmation
+func (am *Manager) CreateDefaultCaddyfileWithPrompt(name string, prompt bool) error {
+	appDir := filepath.Join(am.AppsDir, name)
+	caddyfilePath := filepath.Join(appDir, "Caddyfile")
+
+	// Check for manual changes if Caddyfile exists
+	if _, err := os.Stat(caddyfilePath); err == nil {
+		hasChanges, err := am.DetectCaddyfileChanges(name)
+		if err != nil {
+			return fmt.Errorf("error checking Caddyfile changes: %w", err)
+		}
+		if hasChanges && prompt {
+			fmt.Println("⚠️  Warning: Caddyfile appears to have been manually modified.")
+			fmt.Println("Portico will regenerate it, overwriting your changes.")
+			fmt.Print("Continue? (y/N): ")
+			reader := bufio.NewReader(os.Stdin)
+			response, _ := reader.ReadString('\n')
+			response = strings.TrimSpace(response)
+			if !strings.EqualFold(response, "y") && !strings.EqualFold(response, "yes") {
+				return fmt.Errorf("cancelled by user")
+			}
+		}
+	}
 
 	// Load docker-compose.yml directly (single source of truth)
 	dm := docker.NewManager("") // Registry URL not needed for loading
@@ -367,6 +430,27 @@ func (am *Manager) CreateDefaultCaddyfile(name string) error {
 		} else {
 			// If both local and external IP detection fail, return error
 			return fmt.Errorf("failed to detect server IP for domain generation: %w", err)
+		}
+	} else if strings.HasSuffix(domain, ".sslip.io") {
+		// Migrate old format appname.sslip.io to appname.IP.sslip.io
+		// Check if it's the old format (appname.sslip.io without IP embedded)
+		expectedOldFormat := fmt.Sprintf("%s.sslip.io", name)
+		if domain == expectedOldFormat {
+			// Load config to get configured external IP
+			cfg, err := config.LoadConfig()
+			configuredIP := ""
+			if err == nil {
+				configuredIP = cfg.ExternalIP
+			}
+			// Migrate to new format
+			serverIP, err := util.GetServerIPWithFallback(configuredIP)
+			if err == nil && serverIP != "" {
+				domain = util.AppNameToSSlipIO(name, serverIP)
+				// Update compose metadata (will be saved when SaveApp is called)
+				if compose.XPortico != nil {
+					compose.XPortico.Domain = domain
+				}
+			}
 		}
 	}
 	// Note: We don't auto-migrate .localhost domains here to preserve user-defined domains
@@ -443,28 +527,6 @@ func (am *Manager) CreateDefaultCaddyfile(name string) error {
 
 	// Fix file ownership if running as root
 	_ = util.FixFileOwnership(caddyfilePath)
-
-	return nil
-}
-
-// CreateDefaultSecrets creates default secret files for an application
-func (am *Manager) CreateDefaultSecrets(name string) error {
-	appDir := filepath.Join(am.AppsDir, name)
-	envDir := filepath.Join(appDir, "env")
-
-	// Create default secret files
-	secrets := map[string]string{
-		"database_password": "changeme123",
-		"api_key":           "sk-1234567890abcdef",
-		"jwt_secret":        "jwt-secret-key-very-long-and-secure",
-	}
-
-	for secretName, defaultValue := range secrets {
-		secretPath := filepath.Join(envDir, secretName)
-		if err := os.WriteFile(secretPath, []byte(defaultValue), 0o600); err != nil {
-			return fmt.Errorf("error creating secret %s: %w", secretName, err)
-		}
-	}
 
 	return nil
 }

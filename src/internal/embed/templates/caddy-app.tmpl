@@ -1,5 +1,6 @@
 # {{.AppName}} Caddy Configuration
 # This file will be included in the main Portico Caddyfile
+# Portico Generated - Hash: {{.GeneratedHash}}
 
 {{.Domain}} {
     # Reverse proxy to backend service
@@ -8,7 +9,7 @@
     
     # Logging
     log {
-        output file /var/log/caddy/{{.AppName}}.log
+        output file /home/portico/logs/apps/{{.AppName}}.log
         format json
     }
     

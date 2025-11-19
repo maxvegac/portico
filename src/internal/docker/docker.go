@@ -352,6 +352,7 @@ func (dm *Manager) GenerateDockerCompose(appDir string, services []Service, meta
 						"volumes":     true,
 						"secrets":     true,
 						"depends_on":  true,
+						"logging":     true,
 						"networks":    true,
 					}
 					for k, v := range existingSvcMap {

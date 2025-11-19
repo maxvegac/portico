@@ -231,8 +231,11 @@ func NewSetHttpCmd() *cobra.Command {
 				return
 			}
 
-			// Create/update Caddyfile
-			if err := am.CreateDefaultCaddyfile(appName); err != nil {
+			// Create/update Caddyfile (with prompt for manual changes)
+			if err := am.CreateDefaultCaddyfileWithPrompt(appName, true); err != nil {
+				if err.Error() == "cancelled by user" {
+					return
+				}
 				fmt.Printf("Warning: could not create Caddyfile: %v\n", err)
 			}
 
