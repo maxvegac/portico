@@ -43,6 +43,22 @@ func NewSetHttpPortCmd() *cobra.Command {
 				return
 			}
 
+			// Load docker-compose.yml directly to check http_enabled
+			appDir := filepath.Join(cfg.AppsDir, appName)
+			dm := docker.NewManager(cfg.Registry.URL)
+			compose, err := dm.LoadComposeFile(appDir)
+			if err != nil {
+				fmt.Printf("Error loading docker-compose.yml: %v\n", err)
+				return
+			}
+
+			// Check if HTTP is enabled
+			if compose.XPortico == nil || !compose.XPortico.HttpEnabled {
+				fmt.Printf("Error: HTTP is not enabled for app %s. Use 'portico set %s http-service <service-name>' first\n", appName, appName)
+				return
+			}
+
+			// Load app to get current domain and services
 			am := app.NewManager(cfg.AppsDir, cfg.TemplatesDir)
 			a, err := am.LoadApp(appName)
 			if err != nil {
@@ -50,24 +66,7 @@ func NewSetHttpPortCmd() *cobra.Command {
 				return
 			}
 
-			// Find HTTP service (service with port matching app.Port)
-			var httpService *app.Service
-			if a.Port > 0 {
-				for i := range a.Services {
-					if a.Services[i].Port == a.Port {
-						httpService = &a.Services[i]
-						break
-					}
-				}
-			}
-
-			if httpService == nil {
-				fmt.Printf("Error: no HTTP service found. Use 'portico set %s http-service <service-name>' first\n", appName)
-				return
-			}
-
-			// Update service port and app port
-			httpService.Port = port
+			// Update HTTP port
 			a.Port = port
 
 			if err := am.SaveApp(a); err != nil {
@@ -76,9 +75,6 @@ func NewSetHttpPortCmd() *cobra.Command {
 			}
 
 			// Regenerate docker-compose.yml
-			appDir := filepath.Join(cfg.AppsDir, appName)
-			dm := docker.NewManager(cfg.Registry.URL)
-
 			var dockerServices []docker.Service
 			for _, s := range a.Services {
 				replicas := s.Replicas
@@ -99,8 +95,9 @@ func NewSetHttpPortCmd() *cobra.Command {
 			}
 
 			metadata := &docker.PorticoMetadata{
-				Domain: a.Domain,
-				Port:   a.Port,
+				Domain:      a.Domain,
+				Port:        port,
+				HttpEnabled: true,
 			}
 
 			if err := dm.GenerateDockerCompose(appDir, dockerServices, metadata); err != nil {

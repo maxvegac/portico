@@ -2,13 +2,11 @@ package commands
 
 import (
 	"fmt"
-	"path/filepath"
 
 	"github.com/spf13/cobra"
 
 	"github.com/maxvegac/portico/src/internal/app"
 	"github.com/maxvegac/portico/src/internal/config"
-	"github.com/maxvegac/portico/src/internal/docker"
 	"github.com/maxvegac/portico/src/internal/proxy"
 )
 
@@ -56,61 +54,33 @@ func NewSetHttpServiceCmd() *cobra.Command {
 				fmt.Printf("Error: service '%s' not found in app %s\n", serviceName, appName)
 				fmt.Println("Available services:")
 				for _, s := range a.Services {
-					fmt.Printf("  - %s (port: %d)\n", s.Name, s.Port)
+					fmt.Printf("  - %s\n", s.Name)
 				}
 				return
 			}
 
-			// If service has no port configured, assign a default port (8000)
-			if targetService.Port == 0 {
-				targetService.Port = 8000
-				fmt.Printf("Service '%s' had no port configured, assigned default port 8000\n", serviceName)
+			// Set HTTP port - use service port if configured, otherwise default to 8000
+			// This port is internal to the container, used by Caddy for reverse proxy
+			// It doesn't need to be exposed to the host
+			httpPort := targetService.Port
+			if httpPort == 0 {
+				httpPort = 8000
+				fmt.Printf("Using default HTTP port 8000 for service '%s' (internal container port)\n", serviceName)
 			}
 
 			// Set this service as HTTP service
-			a.Port = targetService.Port
+			a.Port = httpPort
 
+			// Save app configuration (this regenerates docker-compose.yml with updated services)
 			if err := am.SaveApp(a); err != nil {
 				fmt.Printf("Error saving app: %v\n", err)
 				return
 			}
 
-			// Regenerate docker-compose.yml
-			appDir := filepath.Join(cfg.AppsDir, appName)
-			dm := docker.NewManager(cfg.Registry.URL)
-
-			var dockerServices []docker.Service
-			for _, s := range a.Services {
-				replicas := s.Replicas
-				if replicas == 0 {
-					replicas = 1
-				}
-				dockerServices = append(dockerServices, docker.Service{
-					Name:        s.Name,
-					Image:       s.Image,
-					Port:        s.Port,
-					ExtraPorts:  s.ExtraPorts,
-					Environment: s.Environment,
-					Volumes:     s.Volumes,
-					Secrets:     s.Secrets,
-					DependsOn:   s.DependsOn,
-					Replicas:    replicas,
-				})
-			}
-
-			metadata := &docker.PorticoMetadata{
-				Domain: a.Domain,
-				Port:   a.Port,
-			}
-
-			if err := dm.GenerateDockerCompose(appDir, dockerServices, metadata); err != nil {
-				fmt.Printf("Error generating docker compose: %v\n", err)
-				return
-			}
-
-			// Update Caddyfile
+			// Update Caddyfile (after docker-compose.yml has been updated)
 			if err := am.CreateDefaultCaddyfile(appName); err != nil {
-				fmt.Printf("Warning: could not update Caddyfile: %v\n", err)
+				fmt.Printf("Error: could not create Caddyfile: %v\n", err)
+				return
 			}
 
 			pm := proxy.NewCaddyManager(cfg.ProxyDir, cfg.TemplatesDir)
@@ -119,7 +89,7 @@ func NewSetHttpServiceCmd() *cobra.Command {
 				return
 			}
 
-			fmt.Printf("HTTP service set to '%s' (port: %d) for app %s\n", serviceName, targetService.Port, appName)
+			fmt.Printf("HTTP service set to '%s' (internal port: %d) for app %s\n", serviceName, a.Port, appName)
 		},
 	}
 }

@@ -123,7 +123,7 @@ Examples:
 				// Create default app config
 				appConfig = &app.App{
 					Name:   appName,
-					Domain: fmt.Sprintf("%s.localhost", appName),
+					Domain: fmt.Sprintf("%s.sslip.io", appName),
 					Port:   8080,
 					Services: []app.Service{
 						{

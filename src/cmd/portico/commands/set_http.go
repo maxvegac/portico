@@ -100,8 +100,9 @@ func NewSetHttpCmd() *cobra.Command {
 				}
 
 				metadata := &docker.PorticoMetadata{
-					Domain: a.Domain,
-					Port:   0, // HTTP port removed
+					Domain:      a.Domain,
+					Port:        0,
+					HttpEnabled: false,
 				}
 
 				if err := dm.GenerateDockerCompose(appDir, dockerServices, metadata); err != nil {
@@ -133,17 +134,9 @@ func NewSetHttpCmd() *cobra.Command {
 				return
 			}
 
-			// Find services with ports configured
-			var servicesWithPorts []*app.Service
-			for i := range a.Services {
-				if a.Services[i].Port > 0 {
-					servicesWithPorts = append(servicesWithPorts, &a.Services[i])
-				}
-			}
-
-			if len(servicesWithPorts) == 0 {
-				fmt.Printf("Error: no services with ports configured in app %s\n", appName)
-				fmt.Println("Configure a port for a service first, or use 'portico set <app-name> http-service <service-name>'")
+			// Check if there are any services available
+			if len(a.Services) == 0 {
+				fmt.Printf("Error: no services found in app %s\n", appName)
 				return
 			}
 
@@ -151,36 +144,52 @@ func NewSetHttpCmd() *cobra.Command {
 			var targetService *app.Service
 			if serviceName != "" {
 				// Service name was specified
-				for _, s := range servicesWithPorts {
-					if s.Name == serviceName {
-						targetService = s
+				for i := range a.Services {
+					if a.Services[i].Name == serviceName {
+						targetService = &a.Services[i]
 						break
 					}
 				}
 				if targetService == nil {
-					fmt.Printf("Error: service '%s' not found or has no port configured\n", serviceName)
-					fmt.Println("Available services with ports:")
-					for _, s := range servicesWithPorts {
-						fmt.Printf("  - %s (port: %d)\n", s.Name, s.Port)
+					fmt.Printf("Error: service '%s' not found in app %s\n", serviceName, appName)
+					fmt.Println("Available services:")
+					for _, s := range a.Services {
+						fmt.Printf("  - %s\n", s.Name)
 					}
 					return
 				}
-			} else if len(servicesWithPorts) == 1 {
-				// Only one service with port, use it automatically
-				targetService = servicesWithPorts[0]
+			} else if len(a.Services) == 1 {
+				// Only one service, use it automatically
+				targetService = &a.Services[0]
 			} else {
-				// Multiple services, require specification
-				fmt.Printf("Error: app %s has multiple services with ports. Please specify which service to use:\n", appName)
-				fmt.Println("Available services with ports:")
-				for _, s := range servicesWithPorts {
-					fmt.Printf("  - %s (port: %d)\n", s.Name, s.Port)
+				// Multiple services, prefer "web" or require specification
+				for i := range a.Services {
+					if a.Services[i].Name == "web" {
+						targetService = &a.Services[i]
+						break
+					}
 				}
-				fmt.Printf("\nUsage: portico set %s http <service-name>\n", appName)
-				return
+				if targetService == nil {
+					fmt.Printf("Error: app %s has multiple services. Please specify which service to use:\n", appName)
+					fmt.Println("Available services:")
+					for _, s := range a.Services {
+						fmt.Printf("  - %s\n", s.Name)
+					}
+					fmt.Printf("\nUsage: portico set %s http <service-name>\n", appName)
+					return
+				}
+			}
+
+			// Set HTTP port - use service port if configured, otherwise default to 8000
+			// This port is internal to the container, used by Caddy for reverse proxy
+			httpPort := targetService.Port
+			if httpPort == 0 {
+				httpPort = 8000
+				fmt.Printf("Using default HTTP port 8000 for service '%s' (internal container port)\n", targetService.Name)
 			}
 
 			// Enable HTTP port
-			a.Port = targetService.Port
+			a.Port = httpPort
 
 			// Save app configuration
 			if err := am.SaveApp(a); err != nil {
@@ -212,8 +221,9 @@ func NewSetHttpCmd() *cobra.Command {
 			}
 
 			metadata := &docker.PorticoMetadata{
-				Domain: a.Domain,
-				Port:   a.Port,
+				Domain:      a.Domain,
+				Port:        a.Port,
+				HttpEnabled: true,
 			}
 
 			if err := dm.GenerateDockerCompose(appDir, dockerServices, metadata); err != nil {

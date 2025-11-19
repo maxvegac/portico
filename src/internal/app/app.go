@@ -103,8 +103,9 @@ func (am *Manager) SaveApp(app *App) error {
 
 	// Update metadata
 	metadata := &docker.PorticoMetadata{
-		Domain: app.Domain,
-		Port:   app.Port,
+		Domain:      app.Domain,
+		Port:        app.Port,
+		HttpEnabled: app.Port > 0,
 	}
 
 	return dm.GenerateDockerCompose(appDir, dockerServices, metadata)
@@ -137,9 +138,13 @@ func (am *Manager) LoadAppFromCompose(name string) (*App, error) {
 	// Extract metadata from x-portico
 	domain := ""
 	port := 0
+	httpEnabled := false
 	if compose.XPortico != nil {
 		domain = compose.XPortico.Domain
-		port = compose.XPortico.Port
+		httpEnabled = compose.XPortico.HttpEnabled
+		if httpEnabled {
+			port = compose.XPortico.Port
+		}
 	}
 
 	// Convert services from docker-compose.yml format to App.Service format
@@ -152,18 +157,26 @@ func (am *Manager) LoadAppFromCompose(name string) (*App, error) {
 		services = append(services, *svc)
 	}
 
-	// If domain/port not in metadata, try to extract from app name or defaults
+	// If domain not in metadata, use default
 	if domain == "" {
-		domain = fmt.Sprintf("%s.localhost", name)
+		domain = fmt.Sprintf("%s.sslip.io", name)
 	}
-	if port == 0 {
-		port = 8080
+	// Migrate .localhost domains to .sslip.io
+	if strings.HasSuffix(domain, ".localhost") {
+		domain = strings.TrimSuffix(domain, ".localhost") + ".sslip.io"
+		// Update compose metadata if needed (will be saved when SaveApp is called)
+		if compose.XPortico != nil {
+			compose.XPortico.Domain = domain
+		}
 	}
+
+	// Port is only set if HTTP is enabled
+	// If http_enabled is false, port remains 0
 
 	return &App{
 		Name:        name,
 		Domain:      domain,
-		Port:        port,
+		Port:        port,                    // HTTP port (0 if HTTP disabled)
 		Environment: make(map[string]string), // App-level environment not stored in compose
 		Services:    services,
 	}, nil
@@ -289,20 +302,67 @@ func (am *Manager) DeleteApp(name string) error {
 }
 
 // CreateDefaultCaddyfile creates a default Caddyfile for an application
+// Reads directly from docker-compose.yml (single source of truth)
 func (am *Manager) CreateDefaultCaddyfile(name string) error {
 	appDir := filepath.Join(am.AppsDir, name)
 	caddyfilePath := filepath.Join(appDir, "Caddyfile")
 
-	// Load app configuration to get the domain
-	app, err := am.LoadApp(name)
+	// Load docker-compose.yml directly (single source of truth)
+	dm := docker.NewManager("") // Registry URL not needed for loading
+	compose, err := dm.LoadComposeFile(appDir)
 	if err != nil {
-		return fmt.Errorf("error loading app configuration: %w", err)
+		return fmt.Errorf("error loading docker-compose.yml: %w", err)
 	}
 
-	// Use domain from app configuration, fallback to default if empty
-	domain := app.Domain
+	// Check if HTTP is enabled
+	if compose.XPortico == nil || !compose.XPortico.HttpEnabled {
+		return fmt.Errorf("HTTP is not enabled for app %s (background worker, no Caddyfile needed)", name)
+	}
+
+	// Get domain and port from metadata
+	domain := compose.XPortico.Domain
 	if domain == "" {
-		domain = fmt.Sprintf("%s.localhost", name)
+		domain = fmt.Sprintf("%s.sslip.io", name)
+	}
+	// Migrate .localhost domains to .sslip.io
+	if strings.HasSuffix(domain, ".localhost") {
+		domain = strings.TrimSuffix(domain, ".localhost") + ".sslip.io"
+	}
+	httpPort := compose.XPortico.Port
+	if httpPort == 0 {
+		return fmt.Errorf("HTTP port not configured for app %s", name)
+	}
+
+	// Get services from docker-compose.yml
+	if len(compose.Services) == 0 {
+		return fmt.Errorf("no services found in app %s", name)
+	}
+
+	// Get project name from docker-compose.yml (from "name:" field)
+	// Always use directory name to ensure consistency with Docker Compose project naming
+	// Docker Compose uses project name as prefix: appname-servicename
+	projectName := name
+	if compose.Name != "" {
+		projectName = compose.Name
+	}
+
+	// Find the HTTP service
+	// Prefer "web" service if it exists, otherwise use first service available
+	// The service name in docker-compose.yml is the service name (e.g., "web")
+	// Docker Compose will prefix it with project name (e.g., "facturacion-api-web")
+	var serviceName string
+	if _, exists := compose.Services["web"]; exists {
+		serviceName = "web"
+	} else {
+		// Use first service available
+		for svcName := range compose.Services {
+			serviceName = svcName
+			break
+		}
+	}
+
+	if serviceName == "" {
+		return fmt.Errorf("no service found in app %s", name)
 	}
 
 	// Load template from filesystem first, then embedded files
@@ -323,58 +383,18 @@ func (am *Manager) CreateDefaultCaddyfile(name string) error {
 	}
 	defer func() { _ = file.Close() }()
 
-	// Find the HTTP service by matching app.Port (http_port) with service port
-	// This allows any service to be the HTTP service, not just "web"
-	var mainService *Service
-	var servicePort int
-
-	if len(app.Services) == 0 {
-		return fmt.Errorf("no services found in app %s", name)
-	}
-
-	// If app.Port is 0, this is a background worker - skip Caddyfile
-	if app.Port == 0 {
-		return fmt.Errorf("no HTTP port configured for app %s (background worker, no Caddyfile needed)", name)
-	}
-
-	// Find service with port matching app.Port (http_port)
-	for i := range app.Services {
-		if app.Services[i].Port == app.Port {
-			mainService = &app.Services[i]
-			servicePort = app.Port
-			break
-		}
-	}
-
-	// If no service found with matching port, try to find first service with a port > 0
-	if mainService == nil {
-		for i := range app.Services {
-			if app.Services[i].Port > 0 {
-				mainService = &app.Services[i]
-				servicePort = app.Services[i].Port
-				// Update app.Port to match the service port
-				app.Port = servicePort
-				break
-			}
-		}
-	}
-
-	// If still not found, this is a background worker
-	if mainService == nil {
-		return fmt.Errorf("no service with HTTP port %d found in app %s (background worker, no Caddyfile needed)", app.Port, name)
-	}
-
 	// Execute template
+	// Use project name from docker-compose.yml for DNS resolution
 	if err := t.Execute(file, struct {
 		AppName     string
 		Domain      string
 		ServiceName string
 		Port        int
 	}{
-		AppName:     name,
+		AppName:     projectName, // Use project name from docker-compose.yml
 		Domain:      domain,
-		ServiceName: mainService.Name,
-		Port:        servicePort,
+		ServiceName: serviceName,
+		Port:        httpPort,
 	}); err != nil {
 		return fmt.Errorf("error executing caddy-app template: %w", err)
 	}

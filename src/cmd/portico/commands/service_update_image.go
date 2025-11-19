@@ -91,7 +91,7 @@ Examples:
 
 				appConfig = &app.App{
 					Name:   appName,
-					Domain: fmt.Sprintf("%s.localhost", appName),
+					Domain: fmt.Sprintf("%s.sslip.io", appName),
 					Port:   appHTTPPort,
 					Services: []app.Service{
 						{

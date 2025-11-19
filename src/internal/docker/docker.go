@@ -140,6 +140,7 @@ func (dm *Manager) RestartService(appDir string, serviceName string) error {
 
 // ComposeFile represents a docker-compose.yml structure with Portico metadata
 type ComposeFile struct {
+	Name     string                 `yaml:"name,omitempty"` // Project name
 	Services map[string]interface{} `yaml:"services"`
 	Networks map[string]interface{} `yaml:"networks,omitempty"`
 	Secrets  map[string]interface{} `yaml:"secrets,omitempty"`
@@ -148,9 +149,10 @@ type ComposeFile struct {
 
 // PorticoMetadata stores Portico-specific configuration
 type PorticoMetadata struct {
-	Domain    string `yaml:"domain,omitempty"`
-	Port      int    `yaml:"http_port,omitempty"`
-	Generated string `yaml:"generated_hash,omitempty"` // SHA256 hash of the generated content
+	Domain      string `yaml:"domain,omitempty"`
+	Port        int    `yaml:"http_port,omitempty"`
+	HttpEnabled bool   `yaml:"http_enabled,omitempty"`
+	Generated   string `yaml:"generated_hash,omitempty"` // SHA256 hash of the generated content
 }
 
 // LoadComposeFile loads and parses an existing docker-compose.yml
@@ -205,6 +207,7 @@ type TemplateSecret struct {
 
 // TemplateData represents data for docker-compose template
 type TemplateData struct {
+	AppName  string
 	Services []TemplateService
 	Secrets  map[string]TemplateSecret
 	XPortico *PorticoMetadata
@@ -291,8 +294,12 @@ func (dm *Manager) GenerateDockerCompose(appDir string, services []Service, meta
 		}
 	}
 
+	// Extract app name from directory for project name
+	appName := filepath.Base(appDir)
+
 	// Prepare template data
 	templateData := TemplateData{
+		AppName:  appName,
 		Services: templateServices,
 		Secrets:  templateSecrets,
 		XPortico: existing.XPortico,
@@ -375,6 +382,12 @@ func (dm *Manager) GenerateDockerCompose(appDir string, services []Service, meta
 	if metadata != nil {
 		generated.XPortico.Domain = metadata.Domain
 		generated.XPortico.Port = metadata.Port
+		// Set HttpEnabled: explicit value or infer from Port > 0
+		if metadata.Port > 0 {
+			generated.XPortico.HttpEnabled = true
+		} else {
+			generated.XPortico.HttpEnabled = metadata.HttpEnabled
+		}
 	}
 
 	// Calculate hash BEFORE adding the hash field itself
@@ -434,8 +447,9 @@ func (dm *Manager) GetPorticoMetadata(appDir string) (*PorticoMetadata, error) {
 
 	// Return defaults if not found
 	return &PorticoMetadata{
-		Domain: "",
-		Port:   0,
+		Domain:      "",
+		Port:        0,
+		HttpEnabled: false,
 	}, nil
 }
 

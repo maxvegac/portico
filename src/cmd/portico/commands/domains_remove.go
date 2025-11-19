@@ -46,7 +46,7 @@ func NewDomainsRemoveCmd() *cobra.Command {
 			}
 
 			// Remove domain (set to empty or default)
-			a.Domain = fmt.Sprintf("%s.localhost", appName)
+			a.Domain = fmt.Sprintf("%s.sslip.io", appName)
 			if err := am.SaveApp(a); err != nil {
 				fmt.Printf("Error saving app: %v\n", err)
 				return
