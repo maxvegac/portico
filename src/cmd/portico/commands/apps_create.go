@@ -12,6 +12,7 @@ import (
 	"github.com/maxvegac/portico/src/internal/config"
 	"github.com/maxvegac/portico/src/internal/docker"
 	"github.com/maxvegac/portico/src/internal/proxy"
+	"github.com/maxvegac/portico/src/internal/util"
 )
 
 // NewAppsCreateCmd creates the apps create command
@@ -96,9 +97,20 @@ Examples:
 				appHTTPPort = 0
 			}
 
+			// Generate default domain: appname.IP.sslip.io
+			// sslip.io will resolve this based on the server's IP
+			serverIP, err := util.GetServerIPWithFallback(config.ExternalIP)
+			if err != nil {
+				fmt.Printf("Error: failed to detect server IP for domain generation: %v\n", err)
+				fmt.Println("Please set a domain manually using: portico domains <app-name> add <domain>")
+				fmt.Println("Or set external IP using: portico set external-ip <ip-address>")
+				return
+			}
+			defaultDomain := util.AppNameToSSlipIO(appName, serverIP)
+
 			appConfig := &app.App{
 				Name:     appName,
-				Domain:   fmt.Sprintf("%s.sslip.io", appName),
+				Domain:   defaultDomain,
 				Port:     appHTTPPort,
 				Services: []app.Service{},
 			}

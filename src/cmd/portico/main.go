@@ -53,6 +53,7 @@ func main() {
 	setCmd.AddCommand(commands.NewSetHttpPortCmd())
 	setCmd.AddCommand(commands.NewSetHttpServiceCmd())
 	setCmd.AddCommand(commands.NewSetHttpCmd())
+	setCmd.AddCommand(commands.NewSetExternalIPCmd())
 
 	// Env commands (environment variables)
 	envCmd := commands.NewEnvCmd()

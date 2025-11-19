@@ -18,6 +18,7 @@ type Config struct {
 	TemplatesDir string         `yaml:"templates_dir"`
 	AddonsDir    string         `yaml:"addons_dir"`
 	Registry     RegistryConfig `yaml:"registry"`
+	ExternalIP   string         `yaml:"external_ip,omitempty"` // External IP for sslip.io domain generation
 }
 
 // RegistryConfig represents Docker registry configuration
@@ -106,6 +107,7 @@ func LoadConfig() (*Config, error) {
 		ProxyDir:     viper.GetString("proxy_dir"),
 		TemplatesDir: viper.GetString("templates_dir"),
 		AddonsDir:    viper.GetString("addons_dir"),
+		ExternalIP:   viper.GetString("external_ip"),
 		Registry: RegistryConfig{
 			Type:     viper.GetString("registry.type"),
 			URL:      viper.GetString("registry.url"),
@@ -132,6 +134,9 @@ func (c *Config) SaveConfig() error {
 	viper.Set("proxy_dir", c.ProxyDir)
 	viper.Set("templates_dir", c.TemplatesDir)
 	viper.Set("addons_dir", c.AddonsDir)
+	if c.ExternalIP != "" {
+		viper.Set("external_ip", c.ExternalIP)
+	}
 	viper.Set("registry", c.Registry)
 
 	return viper.WriteConfigAs(configPath)

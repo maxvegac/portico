@@ -8,6 +8,7 @@ import (
 	"strings"
 	"text/template"
 
+	"github.com/maxvegac/portico/src/internal/config"
 	"github.com/maxvegac/portico/src/internal/docker"
 	"github.com/maxvegac/portico/src/internal/embed"
 	"github.com/maxvegac/portico/src/internal/util"
@@ -157,18 +158,27 @@ func (am *Manager) LoadAppFromCompose(name string) (*App, error) {
 		services = append(services, *svc)
 	}
 
-	// If domain not in metadata, use default
+	// Only generate domain based on IP if no domain is defined
+	// If domain is already set (even if .localhost), preserve it
 	if domain == "" {
-		domain = fmt.Sprintf("%s.sslip.io", name)
-	}
-	// Migrate .localhost domains to .sslip.io
-	if strings.HasSuffix(domain, ".localhost") {
-		domain = strings.TrimSuffix(domain, ".localhost") + ".sslip.io"
-		// Update compose metadata if needed (will be saved when SaveApp is called)
-		if compose.XPortico != nil {
-			compose.XPortico.Domain = domain
+		// Load config to get configured external IP
+		cfg, err := config.LoadConfig()
+		configuredIP := ""
+		if err == nil {
+			configuredIP = cfg.ExternalIP
+		}
+		// Generate domain: appname.IP.sslip.io format
+		// sslip.io will resolve this based on the server's IP
+		serverIP, err := util.GetServerIPWithFallback(configuredIP)
+		if err == nil && serverIP != "" {
+			domain = util.AppNameToSSlipIO(name, serverIP)
+		} else {
+			// If both local and external IP detection fail, return error
+			return nil, fmt.Errorf("failed to detect server IP for domain generation: %w", err)
 		}
 	}
+	// Note: We don't auto-migrate .localhost domains here to preserve user-defined domains
+	// Users can manually update domains if needed
 
 	// Port is only set if HTTP is enabled
 	// If http_enabled is false, port remains 0
@@ -321,45 +331,67 @@ func (am *Manager) CreateDefaultCaddyfile(name string) error {
 
 	// Get domain and port from metadata
 	domain := compose.XPortico.Domain
+
+	// Get services from docker-compose.yml first (needed for domain generation)
+	if len(compose.Services) == 0 {
+		return fmt.Errorf("no services found in app %s", name)
+	}
+
+	// Find the HTTP service name
+	// Prefer "web" service if it exists, otherwise use first service available
+	var httpServiceName string
+	if _, exists := compose.Services["web"]; exists {
+		httpServiceName = "web"
+	} else {
+		// Use first service available
+		for svcName := range compose.Services {
+			httpServiceName = svcName
+			break
+		}
+	}
+
+	// Only generate domain based on IP if no domain is defined
+	// If domain is already set, preserve it (don't auto-migrate)
 	if domain == "" {
-		domain = fmt.Sprintf("%s.sslip.io", name)
+		// Load config to get configured external IP
+		cfg, err := config.LoadConfig()
+		configuredIP := ""
+		if err == nil {
+			configuredIP = cfg.ExternalIP
+		}
+		// No domain defined, generate appname.IP.sslip.io format
+		// sslip.io will resolve this based on the server's IP
+		serverIP, err := util.GetServerIPWithFallback(configuredIP)
+		if err == nil && serverIP != "" {
+			domain = util.AppNameToSSlipIO(name, serverIP)
+		} else {
+			// If both local and external IP detection fail, return error
+			return fmt.Errorf("failed to detect server IP for domain generation: %w", err)
+		}
 	}
-	// Migrate .localhost domains to .sslip.io
-	if strings.HasSuffix(domain, ".localhost") {
-		domain = strings.TrimSuffix(domain, ".localhost") + ".sslip.io"
-	}
+	// Note: We don't auto-migrate .localhost domains here to preserve user-defined domains
+
 	httpPort := compose.XPortico.Port
 	if httpPort == 0 {
 		return fmt.Errorf("HTTP port not configured for app %s", name)
 	}
 
-	// Get services from docker-compose.yml
-	if len(compose.Services) == 0 {
-		return fmt.Errorf("no services found in app %s", name)
-	}
-
 	// Get project name from docker-compose.yml (from "name:" field)
 	// Always use directory name to ensure consistency with Docker Compose project naming
 	// Docker Compose uses project name as prefix: appname-servicename
+	// Use the app name parameter as primary source (most reliable)
 	projectName := name
+	// Prefer compose.Name if it exists (should match directory name)
 	if compose.Name != "" {
 		projectName = compose.Name
 	}
-
-	// Find the HTTP service
-	// Prefer "web" service if it exists, otherwise use first service available
-	// The service name in docker-compose.yml is the service name (e.g., "web")
-	// Docker Compose will prefix it with project name (e.g., "facturacion-api-web")
-	var serviceName string
-	if _, exists := compose.Services["web"]; exists {
-		serviceName = "web"
-	} else {
-		// Use first service available
-		for svcName := range compose.Services {
-			serviceName = svcName
-			break
-		}
+	// Final fallback: use directory name if everything else fails
+	if projectName == "" {
+		projectName = filepath.Base(appDir)
 	}
+
+	// Use the HTTP service name we found earlier
+	serviceName := httpServiceName
 
 	if serviceName == "" {
 		return fmt.Errorf("no service found in app %s", name)
@@ -385,7 +417,11 @@ func (am *Manager) CreateDefaultCaddyfile(name string) error {
 
 	// Execute template
 	// Use project name from docker-compose.yml for DNS resolution
-	if err := t.Execute(file, struct {
+	// Ensure AppName is never empty - always use directory name as fallback
+	if projectName == "" {
+		projectName = name
+	}
+	templateVars := struct {
 		AppName     string
 		Domain      string
 		ServiceName string
@@ -395,7 +431,8 @@ func (am *Manager) CreateDefaultCaddyfile(name string) error {
 		Domain:      domain,
 		ServiceName: serviceName,
 		Port:        httpPort,
-	}); err != nil {
+	}
+	if err := t.Execute(file, templateVars); err != nil {
 		return fmt.Errorf("error executing caddy-app template: %w", err)
 	}
 

@@ -21,6 +21,7 @@ func NewSetCmd() *cobra.Command {
 				"http-port":    true,
 				"http-service": true,
 				"http":         true,
+				"external-ip":  true,
 			}
 
 			var propertyName string
@@ -107,7 +108,7 @@ func getAppNameFromSetArgs(cmd *cobra.Command) (string, error) {
 					continue
 				}
 				// Skip known properties
-				if args[j] == "http-port" || args[j] == "http-service" || args[j] == "http" {
+				if args[j] == "http-port" || args[j] == "http-service" || args[j] == "http" || args[j] == "external-ip" {
 					continue
 				}
 				// This should be the app-name
