@@ -9,6 +9,7 @@ import (
 
 	"github.com/maxvegac/portico/src/internal/config"
 	"github.com/maxvegac/portico/src/internal/embed"
+	"github.com/maxvegac/portico/src/internal/util"
 )
 
 // NewInitCmd creates the init command for extracting static files
@@ -111,12 +112,18 @@ Templates can be customized by editing files in /home/portico/templates/`,
 				// Link doesn't exist, create it
 				if err := os.Symlink("/var/lib/docker/containers", containersLink); err != nil {
 					fmt.Printf("Warning: could not create symbolic link for Docker container logs: %v\n", err)
-					fmt.Printf("  You can create it manually with: ln -sf /var/lib/docker/containers %s\n", containersLink)
+					fmt.Printf("  You can create it manually with: sudo ln -sf /var/lib/docker/containers %s && sudo chown -h portico:portico %s\n", containersLink, containersLink)
 				} else {
+					// Fix ownership of the symbolic link
+					_ = util.FixFileOwnership(containersLink)
 					fmt.Printf("✅ Created symbolic link: %s -> /var/lib/docker/containers\n", containersLink)
+					fmt.Printf("  Note: You may need to set ACLs for portico user to access container logs:\n")
+					fmt.Printf("  sudo setfacl -R -m u:portico:r-x /var/lib/docker/containers\n")
+					fmt.Printf("  sudo setfacl -R -d -m u:portico:r-x /var/lib/docker/containers\n")
 				}
 			} else {
-				// Link exists, check if it's valid
+				// Link exists, fix ownership and check if it's valid
+				_ = util.FixFileOwnership(containersLink)
 				if _, err := os.Readlink(containersLink); err != nil {
 					fmt.Printf("Warning: %s exists but is not a valid symbolic link\n", containersLink)
 				}

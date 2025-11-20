@@ -96,11 +96,11 @@ if ! command -v docker &> /dev/null; then
             echo -e "${BLUE}📦 Installing Docker for RHEL-based distribution...${NC}"
             # Install required packages
             if command -v dnf &> /dev/null; then
-                sudo dnf install -y dnf-plugins-core
+                sudo dnf install -y dnf-plugins-core acl
                 sudo dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
                 sudo dnf install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
             elif command -v yum &> /dev/null; then
-                sudo yum install -y yum-utils
+                sudo yum install -y yum-utils acl
                 sudo yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
                 sudo yum install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
             else
@@ -161,16 +161,65 @@ sudo chown -R portico:portico /home/portico
 echo -e "${BLUE}🔗 Creating symbolic link for Docker container logs...${NC}"
 if [ ! -L /home/portico/logs/containers ]; then
     sudo ln -sf /var/lib/docker/containers /home/portico/logs/containers
+    sudo chown -h portico:portico /home/portico/logs/containers
     echo -e "${GREEN}✅ Created symbolic link: /home/portico/logs/containers -> /var/lib/docker/containers${NC}"
 else
-    echo -e "${GREEN}✅ Symbolic link already exists${NC}"
+    # Update ownership if link exists
+    sudo chown -h portico:portico /home/portico/logs/containers
+    echo -e "${GREEN}✅ Symbolic link already exists, ownership updated${NC}"
 fi
 
-# Create Docker network
+# Ensure portico user can read Docker container logs
+# Docker containers directory has restrictive permissions (750), so we need ACLs
+if groups portico | grep -q '\bdocker\b'; then
+    echo -e "${GREEN}✅ User 'portico' is in 'docker' group${NC}"
+else
+    echo -e "${YELLOW}⚠️  User 'portico' is not in 'docker' group${NC}"
+    echo -e "${YELLOW}   Adding portico to docker group...${NC}"
+    sudo usermod -aG docker portico
+fi
+
+# Set ACLs to allow portico user to read Docker container logs
+# This is needed because /var/lib/docker/containers has restrictive permissions (750)
+echo -e "${BLUE}🔐 Setting ACLs for Docker container logs access...${NC}"
+if command -v setfacl &>/dev/null; then
+    # Set ACL on the containers directory itself
+    sudo setfacl -m u:portico:r-x /var/lib/docker/containers
+    # Set default ACLs for new containers (applies to new directories)
+    sudo setfacl -d -m u:portico:r-x /var/lib/docker/containers
+    
+    # Apply ACLs recursively to existing containers and their files
+    # This ensures existing containers, directories, and log files are accessible
+    if [ -d /var/lib/docker/containers ] && [ "$(ls -A /var/lib/docker/containers 2>/dev/null)" ]; then
+        echo -e "${BLUE}   Applying ACLs to existing containers...${NC}"
+        sudo setfacl -R -m u:portico:r-x /var/lib/docker/containers
+        # Also set default ACLs recursively for nested directories
+        sudo setfacl -R -d -m u:portico:r-x /var/lib/docker/containers
+    fi
+    
+    echo -e "${GREEN}✅ ACLs configured: portico user can now read container logs${NC}"
+    echo -e "${BLUE}   Note: New containers will automatically inherit these permissions${NC}"
+else
+    echo -e "${YELLOW}⚠️  setfacl not found. ACLs cannot be set automatically.${NC}"
+    echo -e "${YELLOW}   To enable access, install acl package and run:${NC}"
+    echo -e "${YELLOW}   sudo setfacl -R -m u:portico:r-x /var/lib/docker/containers${NC}"
+    echo -e "${YELLOW}   sudo setfacl -R -d -m u:portico:r-x /var/lib/docker/containers${NC}"
+fi
+
+# Create Docker network (as portico user to ensure proper ownership)
 echo -e "${BLUE}🐳 Creating Docker network...${NC}"
-if ! docker network ls | grep -q portico-network; then
-    docker network create portico-network
-    echo -e "${GREEN}✅ Created portico-network${NC}"
+if ! sudo -u portico docker network ls 2>/dev/null | grep -q portico-network; then
+    if sudo -u portico docker network create portico-network 2>/dev/null; then
+        echo -e "${GREEN}✅ Created portico-network${NC}"
+    else
+        # Fallback: try as current user (might be root)
+        if docker network ls | grep -q portico-network; then
+            echo -e "${GREEN}✅ portico-network already exists${NC}"
+        else
+            docker network create portico-network
+            echo -e "${GREEN}✅ Created portico-network${NC}"
+        fi
+    fi
 else
     echo -e "${GREEN}✅ portico-network already exists${NC}"
 fi
@@ -207,6 +256,11 @@ sudo chmod -R g+rwX /home/portico
 sudo chmod g+s /home/portico/apps  # Set setgid bit so new files inherit group
 sudo chmod g+s /home/portico/reverse-proxy  # Set setgid bit so new files inherit group
 sudo chmod g+s /home/portico/addons  # Set setgid bit so new files inherit group
+sudo chmod g+s /home/portico/logs  # Set setgid bit so new files inherit group
+
+# Ensure portico user can write to logs directory
+sudo chmod 775 /home/portico/logs
+sudo chmod 775 /home/portico/logs/apps 2>/dev/null || true
 
 # Addon definitions are now embedded in the binary and will be extracted by portico init
 echo -e "${GREEN}✅ Addon definitions are embedded in the binary${NC}"
@@ -378,14 +432,49 @@ echo -e "${BLUE}📄 Extracting static files from embedded binary...${NC}"
 # Use full path to binary since PATH may not include /usr/local/bin for portico user
 if sudo -u portico /usr/local/bin/portico init; then
     echo -e "${GREEN}✅ Static files extracted successfully${NC}"
+    
+    # Ensure all extracted files have correct ownership
+    echo -e "${BLUE}🔐 Ensuring correct file ownership...${NC}"
+    sudo chown -R portico:portico /home/portico/{templates,www,reverse-proxy,addons,logs} 2>/dev/null || true
+    
+    # Fix permissions on extracted files
+    sudo chmod -R g+rwX /home/portico/{templates,www,reverse-proxy,addons,logs} 2>/dev/null || true
+    sudo chmod 644 /home/portico/config.yml 2>/dev/null || true
+    sudo chmod 644 /home/portico/reverse-proxy/*.yml 2>/dev/null || true
+    sudo chmod 644 /home/portico/reverse-proxy/Caddyfile 2>/dev/null || true
+    
+    echo -e "${GREEN}✅ File ownership verified${NC}"
 else
     echo -e "${RED}❌ Failed to extract static files${NC}"
     echo -e "${YELLOW}💡 Make sure portico binary is installed and accessible${NC}"
     exit 1
 fi
 
-# Start the reverse-proxy
-sudo -u portico bash -c 'cd /home/portico/reverse-proxy && docker compose up -d'
+# Start the reverse-proxy (as portico user)
+echo -e "${BLUE}🚀 Starting reverse-proxy...${NC}"
+if sudo -u portico bash -c 'cd /home/portico/reverse-proxy && docker compose up -d'; then
+    echo -e "${GREEN}✅ Reverse-proxy started${NC}"
+else
+    echo -e "${YELLOW}⚠️  Failed to start reverse-proxy (may already be running)${NC}"
+fi
+
+# Verify installation works for portico user
+echo ""
+echo -e "${BLUE}🔍 Verifying installation for portico user...${NC}"
+if sudo -u portico /usr/local/bin/portico list &>/dev/null; then
+    echo -e "${GREEN}✅ Portico commands work correctly for portico user${NC}"
+else
+    echo -e "${YELLOW}⚠️  Warning: Some Portico commands may not work for portico user${NC}"
+    echo -e "${YELLOW}   This is usually fine if running as root during installation${NC}"
+fi
+
+# Test Docker access for portico user
+if sudo -u portico docker ps &>/dev/null; then
+    echo -e "${GREEN}✅ Docker access verified for portico user${NC}"
+else
+    echo -e "${YELLOW}⚠️  Warning: portico user may not have Docker access${NC}"
+    echo -e "${YELLOW}   User may need to log out and back in for group changes to take effect${NC}"
+fi
 
 echo ""
 echo -e "${GREEN}✅ Portico installation completed!${NC}"
