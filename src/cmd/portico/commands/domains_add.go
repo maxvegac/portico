@@ -2,12 +2,12 @@ package commands
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/spf13/cobra"
 
 	"github.com/maxvegac/portico/src/internal/app"
 	"github.com/maxvegac/portico/src/internal/config"
-	"github.com/maxvegac/portico/src/internal/proxy"
 )
 
 // NewDomainsAddCmd adds a domain to an application
@@ -40,20 +40,19 @@ func NewDomainsAddCmd() *cobra.Command {
 				return
 			}
 
+			domain = strings.ToLower(strings.TrimSpace(domain))
+			if err := validateDomain(domain); err != nil {
+				fmt.Printf("Error: %v\n", err)
+				return
+			}
+
 			a.Domain = domain
 			if err := am.SaveApp(a); err != nil {
 				fmt.Printf("Error saving app: %v\n", err)
 				return
 			}
-
-			if err := am.CreateDefaultCaddyfile(appName); err != nil {
-				fmt.Printf("Error updating app Caddyfile: %v\n", err)
-				return
-			}
-
-			pm := proxy.NewCaddyManager(cfg.ProxyDir, cfg.TemplatesDir)
-			if err := pm.UpdateCaddyfile(cfg.AppsDir); err != nil {
-				fmt.Printf("Error updating proxy Caddyfile: %v\n", err)
+			if err := syncProxy(cfg, am, a); err != nil {
+				fmt.Printf("Error: %v\n", err)
 				return
 			}
 

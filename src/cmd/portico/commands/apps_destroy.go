@@ -11,16 +11,30 @@ import (
 	"github.com/maxvegac/portico/src/internal/config"
 	"github.com/maxvegac/portico/src/internal/docker"
 	"github.com/maxvegac/portico/src/internal/proxy"
+	"github.com/maxvegac/portico/src/internal/util"
 )
 
 // NewAppsDestroyCmd creates the apps destroy command
 func NewAppsDestroyCmd() *cobra.Command {
-	return &cobra.Command{
+	var force bool
+
+	cmd := &cobra.Command{
 		Use:   "destroy [app-name]",
 		Short: "Destroy an application",
+		Long:  "Stop an application's containers and delete its configuration, secrets and git repository.\nAsks for confirmation unless --force is given.",
 		Args:  cobra.ExactArgs(1),
 		Run: func(_ *cobra.Command, args []string) {
 			appName := args[0]
+			if err := util.ValidateAppName(appName); err != nil {
+				fmt.Printf("Error: %v\n", err)
+				return
+			}
+
+			if !force && !confirm(fmt.Sprintf("This will permanently delete app %s, its secrets and git repository. Continue?", appName)) {
+				fmt.Println("Cancelled.")
+				return
+			}
+
 			fmt.Printf("Destroying application: %s\n", appName)
 
 			// Load config
@@ -83,4 +97,7 @@ func NewAppsDestroyCmd() *cobra.Command {
 			fmt.Printf("Application %s destroyed successfully!\n", appName)
 		},
 	}
+
+	cmd.Flags().BoolVarP(&force, "force", "f", false, "Do not ask for confirmation")
+	return cmd
 }

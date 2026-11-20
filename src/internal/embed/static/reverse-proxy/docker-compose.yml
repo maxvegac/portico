@@ -4,9 +4,16 @@ services:
     ports:
       - "80:80"
       - "443:443"
+      - "443:443/udp"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile
-      - /home/portico/www:/home/portico/www
+      # Admin tools published by Portico (see Caddyfile)
+      - ./addons:/etc/caddy/addons:ro
+      - /home/portico/www:/home/portico/www:ro
+      # App Caddyfiles are imported from here (see Caddyfile)
+      - /home/portico/apps:/home/portico/apps:ro
+      # Access logs written by Caddy
+      - /home/portico/logs:/home/portico/logs
       - caddy_data:/data
       - caddy_config:/config
     networks:

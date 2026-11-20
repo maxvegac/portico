@@ -2,12 +2,13 @@ package commands
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -18,10 +19,9 @@ import (
 
 // Constants for repeated strings
 const (
-	defaultVersion = "1.0.0"
-	archAmd64      = "amd64"
-	archArm64      = "arm64"
-	arch386        = "386"
+	archAmd64 = "amd64"
+	archArm64 = "arm64"
+	arch386   = "386"
 )
 
 // Release represents a GitHub release
@@ -115,20 +115,29 @@ func (um *UpdateManager) checkForStableUpdates() (*Release, error) {
 
 // getDevLatestRelease gets the dev-latest release
 func (um *UpdateManager) getDevLatestRelease() *Release {
-	// Create a mock release for dev-latest
+	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/releases/tags/dev-latest", um.RepoOwner, um.RepoName)
+	client := &http.Client{Timeout: 10 * time.Second}
+	if req, err := http.NewRequestWithContext(context.Background(), "GET", apiURL, http.NoBody); err == nil {
+		if resp, err := client.Do(req); err == nil {
+			defer func() { _ = resp.Body.Close() }()
+			var release Release
+			if resp.StatusCode == http.StatusOK && json.NewDecoder(resp.Body).Decode(&release) == nil && len(release.Assets) > 0 {
+				return &release
+			}
+		}
+	}
+
+	// Fallback: build the download URLs directly
+	downloadURL := func(name string) string {
+		return fmt.Sprintf("https://github.com/%s/%s/releases/download/dev-latest/%s", um.RepoOwner, um.RepoName, name)
+	}
 	return &Release{
 		TagName:    "dev-latest",
 		Name:       "Development Latest",
 		Prerelease: true,
 		Assets: []Asset{
-			{
-				Name: um.getAssetName(),
-				BrowserDownloadURL: fmt.Sprintf(
-					"https://github.com/%s/%s/releases/download/dev-latest/%s",
-					um.RepoOwner, um.RepoName, um.getAssetName(),
-				),
-				Size: 0, // Unknown size
-			},
+			{Name: um.getAssetName(), BrowserDownloadURL: downloadURL(um.getAssetName())},
+			{Name: checksumsAsset, BrowserDownloadURL: downloadURL(checksumsAsset)},
 		},
 		PublishedAt: time.Now().Format(time.RFC3339),
 	}
@@ -136,18 +145,85 @@ func (um *UpdateManager) getDevLatestRelease() *Release {
 
 // GetCurrentVersion gets the current version of Portico
 func (um *UpdateManager) GetCurrentVersion() (string, error) {
-	// Try to get git tag first
-	if tag, err := exec.Command("git", "describe", "--tags", "--exact-match", "HEAD").Output(); err == nil {
-		return strings.TrimSpace(string(tag)), nil
+	if Version == "" {
+		return "dev", nil
+	}
+	return Version, nil
+}
+
+// checksumsAsset is the release asset with "sha256  filename" lines (published by CI)
+const checksumsAsset = "checksums.txt"
+
+// expectedChecksum returns the published SHA256 of the binary for this platform
+func (um *UpdateManager) expectedChecksum(release *Release) (string, error) {
+	var checksums *Asset
+	for i := range release.Assets {
+		if release.Assets[i].Name == checksumsAsset {
+			checksums = &release.Assets[i]
+		}
+	}
+	if checksums == nil {
+		return "", fmt.Errorf("release %s has no %s", release.TagName, checksumsAsset)
 	}
 
-	// If no tag, use commit hash
-	if hash, err := exec.Command("git", "rev-parse", "--short", "HEAD").Output(); err == nil {
-		return strings.TrimSpace(string(hash)), nil
+	client := &http.Client{Timeout: 30 * time.Second}
+	req, err := http.NewRequestWithContext(context.Background(), "GET", checksums.BrowserDownloadURL, http.NoBody)
+	if err != nil {
+		return "", err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("error downloading %s: %w", checksumsAsset, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("downloading %s failed with status %d", checksumsAsset, resp.StatusCode)
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return "", err
 	}
 
-	// Fallback to hardcoded version
-	return defaultVersion, nil
+	return parseChecksum(string(data), um.getAssetName())
+}
+
+// parseChecksum finds the checksum of name in sha256sum output
+func parseChecksum(checksums, name string) (string, error) {
+	for _, line := range strings.Split(checksums, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 2 && strings.TrimPrefix(fields[1], "*") == name {
+			return strings.ToLower(fields[0]), nil
+		}
+	}
+	return "", fmt.Errorf("no checksum found for %s", name)
+}
+
+// fileSHA256 returns the hex SHA256 of a file
+func fileSHA256(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = f.Close() }()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// IsUpToDate reports whether the running binary already matches the release.
+// The checksum comparison also works for dev-latest, whose tag never changes.
+func (um *UpdateManager) IsUpToDate(release *Release) bool {
+	if expected, err := um.expectedChecksum(release); err == nil {
+		if exe, err := os.Executable(); err == nil {
+			if current, err := fileSHA256(exe); err == nil {
+				return current == expected
+			}
+		}
+	}
+	current, _ := um.GetCurrentVersion()
+	return release.TagName == current && release.TagName != "dev-latest"
 }
 
 // DownloadRelease downloads the latest release binary
@@ -155,6 +231,11 @@ func (um *UpdateManager) DownloadRelease(release *Release) error {
 	targetAsset, err := um.findTargetAsset(release)
 	if err != nil {
 		return err
+	}
+
+	expected, err := um.expectedChecksum(release)
+	if err != nil {
+		return fmt.Errorf("cannot verify download, aborting: %w", err)
 	}
 
 	fmt.Printf("Downloading %s...\n", targetAsset.Name)
@@ -165,6 +246,15 @@ func (um *UpdateManager) DownloadRelease(release *Release) error {
 	}
 	defer func() { _ = os.Remove(tmpFile.Name()) }()
 
+	actual, err := fileSHA256(tmpFile.Name())
+	if err != nil {
+		return fmt.Errorf("error hashing download: %w", err)
+	}
+	if actual != expected {
+		return fmt.Errorf("checksum mismatch for %s (expected %s, got %s), aborting", targetAsset.Name, expected, actual)
+	}
+	fmt.Println("Checksum verified.")
+
 	return um.installBinary(tmpFile.Name())
 }
 
@@ -173,7 +263,7 @@ func (um *UpdateManager) findTargetAsset(release *Release) (*Asset, error) {
 	assetName := um.getAssetName()
 
 	for i, asset := range release.Assets {
-		if strings.Contains(asset.Name, assetName) {
+		if asset.Name == assetName {
 			return &release.Assets[i], nil
 		}
 	}
@@ -183,7 +273,7 @@ func (um *UpdateManager) findTargetAsset(release *Release) (*Asset, error) {
 
 // downloadBinary downloads the binary to a temporary file
 func (um *UpdateManager) downloadBinary(asset *Asset) (*os.File, error) {
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := &http.Client{Timeout: 10 * time.Minute}
 	req, err := http.NewRequestWithContext(context.Background(), "GET", asset.BrowserDownloadURL, http.NoBody)
 	if err != nil {
 		return nil, fmt.Errorf("error creating request: %w", err)
@@ -199,8 +289,16 @@ func (um *UpdateManager) downloadBinary(asset *Asset) (*os.File, error) {
 		return nil, fmt.Errorf("download failed with status %d", resp.StatusCode)
 	}
 
-	// Create temporary file
-	tmpFile, err := os.CreateTemp("", "portico-update-*")
+	// Create the temporary file next to the current binary: os.Rename cannot move
+	// files across filesystems, and /tmp is often a tmpfs on Linux.
+	tmpDir := ""
+	if exe, err := os.Executable(); err == nil {
+		tmpDir = filepath.Dir(exe)
+	}
+	tmpFile, err := os.CreateTemp(tmpDir, ".portico-update-*")
+	if err != nil && tmpDir != "" {
+		tmpFile, err = os.CreateTemp("", "portico-update-*")
+	}
 	if err != nil {
 		return nil, fmt.Errorf("error creating temp file: %w", err)
 	}
@@ -351,7 +449,8 @@ func NewUpdateCmd() *cobra.Command {
 // runUpdateCommand handles the update command logic
 func runUpdateCommand(cmd *cobra.Command) {
 	// Determine if we're in dev mode
-	isDev := false
+	// Dev builds follow dev-latest unless asked otherwise
+	isDev := strings.HasPrefix(Version, "dev")
 	if devFlag, _ := cmd.Flags().GetBool("dev"); devFlag {
 		isDev = true
 	}
@@ -379,7 +478,7 @@ func runUpdateCommand(cmd *cobra.Command) {
 	fmt.Printf("Latest version: %s\n", latestRelease.TagName)
 
 	// Check if update is needed
-	if latestRelease.TagName == currentVersion {
+	if updateManager.IsUpToDate(latestRelease) {
 		fmt.Println("✅ You're already running the latest version!")
 		return
 	}

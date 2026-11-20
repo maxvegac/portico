@@ -2,15 +2,12 @@ package commands
 
 import (
 	"fmt"
-	"path/filepath"
 	"strconv"
 
 	"github.com/spf13/cobra"
 
 	"github.com/maxvegac/portico/src/internal/app"
 	"github.com/maxvegac/portico/src/internal/config"
-	"github.com/maxvegac/portico/src/internal/docker"
-	"github.com/maxvegac/portico/src/internal/proxy"
 )
 
 // NewServiceScaleCmd sets the number of replicas for a service
@@ -84,55 +81,9 @@ Examples:
 				return
 			}
 
-			// Save app configuration
-			if err := appManager.SaveApp(appConfig); err != nil {
-				fmt.Printf("Error saving app: %v\n", err)
-				return
-			}
-
-			// Generate docker-compose.yml
-			dockerManager := docker.NewManager(cfg.Registry.URL)
-			appDir := filepath.Join(cfg.AppsDir, appName)
-
-			var dockerServices []docker.Service
-			for _, svc := range appConfig.Services {
-				svcReplicas := svc.Replicas
-				if svcReplicas == 0 {
-					svcReplicas = 1 // Default to 1 if not specified
-				}
-				dockerServices = append(dockerServices, docker.Service{
-					Name:        svc.Name,
-					Image:       svc.Image,
-					Port:        svc.Port,
-					ExtraPorts:  svc.ExtraPorts,
-					Environment: svc.Environment,
-					Volumes:     svc.Volumes,
-					Secrets:     svc.Secrets,
-					DependsOn:   svc.DependsOn,
-					Replicas:    svcReplicas,
-				})
-			}
-
-			metadata := &docker.PorticoMetadata{
-				Domain: appConfig.Domain,
-				Port:   appConfig.Port,
-			}
-
-			if err := dockerManager.GenerateDockerCompose(appDir, dockerServices, metadata); err != nil {
-				fmt.Printf("Error generating docker compose: %v\n", err)
-				return
-			}
-
-			// Deploy with scale
-			if err := dockerManager.DeployApp(appDir, dockerServices); err != nil {
-				fmt.Printf("Error deploying app: %v\n", err)
-				return
-			}
-
-			// Update Caddyfile (in case it's the main service)
-			proxyManager := proxy.NewCaddyManager(cfg.ProxyDir, cfg.TemplatesDir)
-			if err := proxyManager.UpdateCaddyfile(cfg.AppsDir); err != nil {
-				fmt.Printf("Error updating Caddyfile: %v\n", err)
+			// Save (replicas are persisted in x-portico), deploy with --scale and refresh proxy
+			if err := applyApp(cfg, appManager, appConfig); err != nil {
+				fmt.Printf("Error: %v\n", err)
 				return
 			}
 

@@ -9,6 +9,7 @@ import (
 
 	"github.com/maxvegac/portico/src/internal/config"
 	"github.com/maxvegac/portico/src/internal/embed"
+	"github.com/maxvegac/portico/src/internal/proxy"
 	"github.com/maxvegac/portico/src/internal/util"
 )
 
@@ -68,11 +69,14 @@ Templates can be customized by editing files in /home/portico/templates/`,
 				return
 			}
 
-			// Extract config.yml to portico home root
+			// Extract config.yml to portico home root (never overwrite an existing one:
+			// it holds user settings such as external_ip and registry credentials)
 			configPath := filepath.Join(cfg.PorticoHome, "config.yml")
-			if err := embed.ExtractStaticFile("static/config.yml", configPath); err != nil {
-				fmt.Printf("Error extracting config.yml: %v\n", err)
-				return
+			if _, err := os.Stat(configPath); os.IsNotExist(err) {
+				if err := embed.ExtractStaticFile("static/config.yml", configPath); err != nil {
+					fmt.Printf("Error extracting config.yml: %v\n", err)
+					return
+				}
 			}
 
 			// Extract docker-compose.yml to reverse-proxy directory
@@ -91,14 +95,19 @@ Templates can be customized by editing files in /home/portico/templates/`,
 
 			// Extract addon definitions
 			addonsDir := filepath.Join(cfg.AddonsDir, "definitions")
-			addonTypes := []string{"postgresql", "mysql", "mariadb", "mongodb", "redis", "valkey"}
-
-			for _, addonType := range addonTypes {
+			for _, addonType := range addonTypeNames {
 				if err := embed.ExtractAddonDefinition(addonType, addonsDir); err != nil {
 					// Not all addons might exist, so we just warn
 					fmt.Printf("Warning: could not extract %s definition: %v\n", addonType, err)
 				}
 			}
+
+			// Proxy configs of published admin tools (mounted into Caddy)
+			proxyAddonsDir := filepath.Join(cfg.ProxyDir, "addons")
+			if err := os.MkdirAll(proxyAddonsDir, 0o755); err != nil {
+				fmt.Printf("Warning: could not create %s: %v\n", proxyAddonsDir, err)
+			}
+			_ = util.FixDirOwnership(proxyAddonsDir)
 
 			// Create logs/apps directory if it doesn't exist
 			logsAppsDir := filepath.Join(cfg.PorticoHome, "logs", "apps")
@@ -129,7 +138,13 @@ Templates can be customized by editing files in /home/portico/templates/`,
 				}
 			}
 
+			// Reload Caddy if it is already running (ignored otherwise)
+			pm := proxy.NewCaddyManager(cfg.ProxyDir, cfg.TemplatesDir)
+			_ = pm.ReloadCaddy()
+
 			fmt.Printf("✅ Static files extracted successfully\n")
+			fmt.Printf("If the reverse proxy was already running, apply the new configuration with:\n")
+			fmt.Printf("  cd %s && docker compose up -d\n", cfg.ProxyDir)
 		},
 	}
 

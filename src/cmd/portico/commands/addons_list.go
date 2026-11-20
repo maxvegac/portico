@@ -27,14 +27,12 @@ func NewAddonsListCmd() *cobra.Command {
 			am := addon.NewManager(cfg.AddonsDir, filepath.Join(cfg.AddonsDir, "instances"))
 
 			// Available addon types
-			addonTypes := []string{"postgresql", "mariadb", "mysql", "mongodb", "redis", "valkey"}
-
 			if len(args) == 0 {
 				// List all addon types
 				fmt.Println("Available addon types:")
 				fmt.Println()
 
-				for _, addonType := range addonTypes {
+				for _, addonType := range addonTypeNames {
 					def, err := am.LoadDefinition(addonType)
 					if err != nil {
 						fmt.Printf("  %s - (definition not found)\n", addonType)

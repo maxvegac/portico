@@ -2,6 +2,7 @@ package commands
 
 import (
 	"fmt"
+	"sort"
 
 	"github.com/spf13/cobra"
 
@@ -58,9 +59,7 @@ func NewEnvListCmd() *cobra.Command {
 						if len(s.Environment) == 0 {
 							fmt.Println("  (none)")
 						} else {
-							for k, v := range s.Environment {
-								fmt.Printf("  %s=%s\n", k, v)
-							}
+							printEnv(s.Environment)
 						}
 						break
 					}
@@ -76,9 +75,7 @@ func NewEnvListCmd() *cobra.Command {
 					if len(s.Environment) == 0 {
 						fmt.Println("  (none)")
 					} else {
-						for k, v := range s.Environment {
-							fmt.Printf("  %s=%s\n", k, v)
-						}
+						printEnv(s.Environment)
 					}
 					fmt.Println()
 				}
@@ -87,4 +84,16 @@ func NewEnvListCmd() *cobra.Command {
 	}
 
 	return cmd
+}
+
+// printEnv prints environment variables sorted by name
+func printEnv(env map[string]string) {
+	keys := make([]string, 0, len(env))
+	for k := range env {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		fmt.Printf("  %s=%s\n", k, env[k])
+	}
 }

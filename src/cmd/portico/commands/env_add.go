@@ -15,10 +15,11 @@ import (
 // NewEnvAddCmd adds an environment variable for a service in an app
 func NewEnvAddCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "add [key] [value]",
-		Short: "Add an environment variable",
-		Long:  "Add an environment variable for a service in the given app.\n\nExamples:\n  portico env my-app add NODE_ENV production\n    Adds NODE_ENV=production (uses default service if only one exists)\n\n  portico env my-app api add DATABASE_URL postgres://...\n    Adds DATABASE_URL for service 'api'",
-		Args:  cobra.ExactArgs(2),
+		Use:                "add [key] [value]",
+		Short:              "Add an environment variable",
+		Long:               "Add an environment variable for a service in the given app.\n\nExamples:\n  portico env my-app add NODE_ENV production\n    Adds NODE_ENV=production (uses default service if only one exists)\n\n  portico env my-app api add DATABASE_URL postgres://...\n    Adds DATABASE_URL for service 'api'",
+		Args:               cobra.ExactArgs(2),
+		DisableFlagParsing: true, // values may start with '-'
 		Run: func(cmd *cobra.Command, args []string) {
 			// Get app-name from parent command (env)
 			appName, err := getAppNameFromEnvArgs(cmd)
@@ -32,6 +33,10 @@ func NewEnvAddCmd() *cobra.Command {
 			serviceName, _ := getServiceNameFromEnvArgs(cmd)
 
 			key := strings.TrimSpace(args[0])
+			if !envKeyRe.MatchString(key) {
+				fmt.Printf("Error: invalid environment variable name %q\n", key)
+				return
+			}
 			value := strings.TrimSpace(args[1])
 
 			if key == "" {
@@ -92,8 +97,9 @@ func NewEnvAddCmd() *cobra.Command {
 				return
 			}
 
-			if err := am.SaveApp(a); err != nil {
-				fmt.Printf("Error saving app: %v\n", err)
+			// Save (regenerates docker-compose.yml), redeploy and refresh the proxy
+			if err := applyApp(cfg, am, a); err != nil {
+				fmt.Printf("Error: %v\n", err)
 				return
 			}
 
@@ -101,45 +107,12 @@ func NewEnvAddCmd() *cobra.Command {
 			dm := docker.NewManager(cfg.Registry.URL)
 			appDir := filepath.Join(cfg.AppsDir, appName)
 
-			var dockerServices []docker.Service
-			for _, s := range a.Services {
-				replicas := s.Replicas
-				if replicas == 0 {
-					replicas = 1 // Default to 1 if not specified
-				}
-				dockerServices = append(dockerServices, docker.Service{
-					Name:        s.Name,
-					Image:       s.Image,
-					Port:        s.Port,
-					ExtraPorts:  s.ExtraPorts,
-					Environment: s.Environment,
-					Volumes:     s.Volumes,
-					Secrets:     s.Secrets,
-					DependsOn:   s.DependsOn,
-					Replicas:    replicas,
-				})
-			}
-
-			metadata := &docker.PorticoMetadata{
-				Domain: a.Domain,
-				Port:   a.Port,
-			}
-
-			if err := dm.GenerateDockerCompose(appDir, dockerServices, metadata); err != nil {
-				fmt.Printf("Error generating docker compose: %v\n", err)
-				return
-			}
-			if err := dm.DeployApp(appDir, dockerServices); err != nil {
-				fmt.Printf("Error deploying app: %v\n", err)
-				return
-			}
-
 			// Restart the service to apply new environment variable
 			if err := dm.RestartService(appDir, serviceName); err != nil {
 				fmt.Printf("Warning: could not restart service: %v\n", err)
 			}
 
-			fmt.Printf("Added environment variable %s=%s for service %s in %s\n", key, value, serviceName, appName)
+			fmt.Printf("Added environment variable %s for service %s in %s\n", key, serviceName, appName)
 		},
 	}
 

@@ -4,19 +4,25 @@
 # Import all app configurations
 import /home/portico/apps/*/Caddyfile
 
+# Import admin tools published with 'portico addons create <name> --domain ...'
+import /etc/caddy/addons/*.Caddyfile
+
 # Default catch-all - serve Portico welcome page
 :443 {
-    root * /home/portico/www
-    file_server
-    try_files {path} /index.html
+	root * /home/portico/www
+	file_server
+	try_files {path} /index.html
 
-    tls {
-        issuer internal
-        on_demand
-    }
+	tls {
+		issuer internal
+		on_demand
+	}
 
-    log {
-        output file /home/portico/logs/caddy.log
-        format json
-    }
+	log {
+		output file /home/portico/logs/caddy.log {
+			# Readable by the portico user (Caddy runs as root in its container)
+			mode 0644
+		}
+		format json
+	}
 }

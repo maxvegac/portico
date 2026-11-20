@@ -3,28 +3,25 @@
 # Portico Generated - Hash: {{.GeneratedHash}}
 
 {{.Domain}} {
-    # Reverse proxy to backend service
-    # Use appname-servicename format for DNS resolution in Docker network
-    reverse_proxy {{.AppName}}-{{.ServiceName}}:{{.Port}}
-    
-    # Logging
-    log {
-        output file /home/portico/logs/apps/{{.AppName}}.log
-        format json
-    }
-    
-    # Forward all necessary headers for proper request handling
-    header_up Host {host}
-    header_up X-Real-IP {remote}
-    header_up X-Forwarded-For {remote}
-    header_up X-Forwarded-Proto {scheme}
-    header_up X-Forwarded-Host {host}
-    header_up X-Forwarded-Port {port}
-    
-    # Security headers
-    header {
-        X-Content-Type-Options nosniff
-        X-Frame-Options DENY
-        X-XSS-Protection "1; mode=block"
-    }
+	# Reverse proxy to backend service via its portico-network alias (<app>-<service>).
+	# Caddy already sets Host, X-Forwarded-For, X-Forwarded-Proto and X-Forwarded-Host.
+	reverse_proxy {{.Upstream}}:{{.Port}} {
+		header_up X-Real-IP {remote_host}
+	}
+
+	# Logging
+	log {
+		output file /home/portico/logs/apps/{{.AppName}}.log {
+			# Readable by the portico user (Caddy runs as root in its container)
+			mode 0644
+		}
+		format json
+	}
+
+	# Security headers
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy strict-origin-when-cross-origin
+	}
 }

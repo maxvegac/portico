@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -17,7 +18,7 @@ func NewCheckUpdateCmd() *cobra.Command {
 		Long:  `Check if a newer version of Portico is available without downloading it.`,
 		Run: func(cmd *cobra.Command, _ []string) {
 			// Determine if we're in dev mode
-			isDev := false
+			isDev := strings.HasPrefix(Version, "dev")
 			if devFlag, _ := cmd.Flags().GetBool("dev"); devFlag {
 				isDev = true
 			}
@@ -40,7 +41,7 @@ func NewCheckUpdateCmd() *cobra.Command {
 			}
 
 			// Compare versions
-			if latestRelease.TagName == currentVersion {
+			if updateManager.IsUpToDate(latestRelease) {
 				fmt.Printf("✅ You're running the latest version: %s\n", currentVersion)
 			} else {
 				fmt.Printf("📦 Update available!\n")
@@ -157,7 +158,7 @@ func CheckAutoUpdate() {
 	}
 
 	// Check for updates
-	updateManager := NewUpdateManager("maxvegac", "portico", false)
+	updateManager := NewUpdateManager("maxvegac", "portico", strings.HasPrefix(Version, "dev"))
 	currentVersion, err := updateManager.GetCurrentVersion()
 	if err != nil {
 		return
@@ -168,7 +169,7 @@ func CheckAutoUpdate() {
 		return
 	}
 
-	if latestRelease.TagName != currentVersion {
+	if !updateManager.IsUpToDate(latestRelease) {
 		fmt.Printf("🔄 Update available: %s -> %s (run 'portico update' to update)\n", currentVersion, latestRelease.TagName)
 	}
 }

@@ -33,6 +33,10 @@ func NewEnvDeleteCmd() *cobra.Command {
 			serviceName, _ := getServiceNameFromEnvArgs(cmd)
 
 			key := strings.TrimSpace(args[0])
+			if !envKeyRe.MatchString(key) {
+				fmt.Printf("Error: invalid environment variable name %q\n", key)
+				return
+			}
 
 			if key == "" {
 				fmt.Println("Error: key is required")
@@ -94,47 +98,15 @@ func NewEnvDeleteCmd() *cobra.Command {
 				return
 			}
 
-			if err := am.SaveApp(a); err != nil {
-				fmt.Printf("Error saving app: %v\n", err)
+			// Save (regenerates docker-compose.yml), redeploy and refresh the proxy
+			if err := applyApp(cfg, am, a); err != nil {
+				fmt.Printf("Error: %v\n", err)
 				return
 			}
 
 			// Regenerate docker-compose and redeploy
 			dm := docker.NewManager(cfg.Registry.URL)
 			appDir := filepath.Join(cfg.AppsDir, appName)
-
-			var dockerServices []docker.Service
-			for _, s := range a.Services {
-				replicas := s.Replicas
-				if replicas == 0 {
-					replicas = 1 // Default to 1 if not specified
-				}
-				dockerServices = append(dockerServices, docker.Service{
-					Name:        s.Name,
-					Image:       s.Image,
-					Port:        s.Port,
-					ExtraPorts:  s.ExtraPorts,
-					Environment: s.Environment,
-					Volumes:     s.Volumes,
-					Secrets:     s.Secrets,
-					DependsOn:   s.DependsOn,
-					Replicas:    replicas,
-				})
-			}
-
-			metadata := &docker.PorticoMetadata{
-				Domain: a.Domain,
-				Port:   a.Port,
-			}
-
-			if err := dm.GenerateDockerCompose(appDir, dockerServices, metadata); err != nil {
-				fmt.Printf("Error generating docker compose: %v\n", err)
-				return
-			}
-			if err := dm.DeployApp(appDir, dockerServices); err != nil {
-				fmt.Printf("Error deploying app: %v\n", err)
-				return
-			}
 
 			// Restart the service to apply removed environment variable
 			if err := dm.RestartService(appDir, serviceName); err != nil {

@@ -2,7 +2,6 @@ package commands
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/spf13/cobra"
 
@@ -27,81 +26,8 @@ Examples:
 
 Note: If the app has only one service, service-name can be omitted.`,
 		Args:               cobra.ArbitraryArgs,
-		DisableFlagParsing: true,
-		Run: func(parentCmd *cobra.Command, args []string) {
-			// Parse os.Args directly since DisableFlagParsing is true
-			allArgs := os.Args[1:] // Skip program name
-			knownCommands := map[string]bool{
-				"image": true,
-				"scale": true,
-			}
-
-			var subcommandName string
-			var subcommandIndex int
-
-			// Find "service" in arguments
-			serviceIndex := -1
-			for i, arg := range allArgs {
-				if arg == "service" {
-					serviceIndex = i
-					break
-				}
-			}
-
-			if serviceIndex == -1 {
-				_ = parentCmd.Help()
-				return
-			}
-
-			// Find subcommand after "service"
-			for i := serviceIndex + 1; i < len(allArgs); i++ {
-				if knownCommands[allArgs[i]] {
-					subcommandName = allArgs[i]
-					subcommandIndex = i
-					break
-				}
-			}
-
-			// If no subcommand found, show help
-			if subcommandName == "" {
-				_ = parentCmd.Help()
-				return
-			}
-
-			// Find and execute subcommand
-			for _, subCmd := range parentCmd.Commands() {
-				if subCmd.Name() == subcommandName {
-					// Get arguments for subcommand (everything after subcommand name)
-					subcommandArgs := allArgs[subcommandIndex+1:]
-
-					// Parse flags manually for the subcommand
-					if err := subCmd.ParseFlags(subcommandArgs); err != nil {
-						fmt.Printf("Error parsing flags: %v\n", err)
-						_ = subCmd.Help()
-						return
-					}
-
-					// Get non-flag arguments
-					nonFlagArgs := subCmd.Flags().Args()
-
-					// Call the subcommand's Run function directly to avoid recursion
-					if subCmd.Run != nil {
-						subCmd.Run(subCmd, nonFlagArgs)
-					} else if subCmd.RunE != nil {
-						if err := subCmd.RunE(subCmd, nonFlagArgs); err != nil {
-							fmt.Printf("Error: %v\n", err)
-							_ = subCmd.Help()
-						}
-					} else {
-						_ = subCmd.Help()
-					}
-					return
-				}
-			}
-
-			// Subcommand not found
-			_ = parentCmd.Help()
-		},
+		DisableFlagParsing: true, // flags belong to the subcommands (e.g. image --port)
+		Run:                newNestedRun("service"),
 	}
 
 	// Add subcommands
@@ -115,40 +41,7 @@ Note: If the app has only one service, service-name can be omitted.`,
 // App-name MUST be explicit in command line arguments
 // Auto-detects service-name if app has only one service
 func getAppAndServiceFromArgs(cmd *cobra.Command) (string, string, error) {
-	args := os.Args[1:] // Skip program name
-	knownCommands := map[string]bool{
-		"image": true,
-		"scale": true,
-	}
-
-	var appName string
-	var serviceName string
-
-	// Extract from command line arguments - app-name MUST be explicit
-	for i, arg := range args {
-		if arg == "service" {
-			// Next non-flag argument should be app-name
-			for j := i + 1; j < len(args); j++ {
-				// Skip if it's a flag
-				if len(args[j]) > 0 && args[j][0] == '-' {
-					continue
-				}
-				// Skip known commands
-				if knownCommands[args[j]] {
-					continue
-				}
-				// First non-flag, non-command should be app-name
-				if appName == "" {
-					appName = args[j]
-				} else if serviceName == "" {
-					// Second should be service-name
-					serviceName = args[j]
-					break
-				}
-			}
-			break
-		}
-	}
+	appName, serviceName := nestedAppAndService(cmd)
 
 	// If service-name not found and we have app-name, try to auto-detect if only one service exists
 	if appName != "" && serviceName == "" {

@@ -41,28 +41,15 @@ func NewPortsListCmd() *cobra.Command {
 				return
 			}
 
-			// Find HTTP service by matching app.Port with service port
-			var httpService *app.Service
-			if a.Port > 0 {
-				for i := range a.Services {
-					if a.Services[i].Port == a.Port {
-						httpService = &a.Services[i]
-						break
-					}
-				}
-			}
-
-			// Show HTTP port and service name if HTTP service exists
-			if httpService != nil {
-				fmt.Printf("HTTP service: %s (port: %d, used by Caddy)\n", httpService.Name, a.Port)
-				fmt.Println()
+			// Show which service receives HTTP traffic through Caddy
+			if httpService := a.HTTPServiceName(); a.Port > 0 && httpService != "" {
+				fmt.Printf("HTTP service: %s (internal port: %d, used by Caddy)\n", httpService, a.Port)
 			} else if a.Port > 0 {
-				fmt.Printf("HTTP port configured: %d, but no service found with this port\n", a.Port)
-				fmt.Println()
+				fmt.Printf("HTTP port configured: %d (no services yet)\n", a.Port)
 			} else {
 				fmt.Println("App type: Background worker (no HTTP port configured)")
-				fmt.Println()
 			}
+			fmt.Println()
 
 			// If no services exist
 			if len(a.Services) == 0 {
@@ -78,7 +65,7 @@ func NewPortsListCmd() *cobra.Command {
 					// Multiple services - show all instead of assuming "web"
 					fmt.Println("Available services:")
 					for _, s := range a.Services {
-						fmt.Printf("  - %s (port: %d)\n", s.Name, s.Port)
+						fmt.Printf("  - %s\n", s.Name)
 					}
 					fmt.Println()
 					fmt.Println("To list ports for a specific service, use:")
@@ -93,11 +80,10 @@ func NewPortsListCmd() *cobra.Command {
 				if s.Name == serviceName {
 					found = true
 					fmt.Printf("Service: %s\n", serviceName)
-					fmt.Printf("Primary port: %d\n", s.Port)
 					if len(s.ExtraPorts) == 0 {
-						fmt.Println("Extra ports: (none)")
+						fmt.Println("Published ports: (none)")
 					} else {
-						fmt.Println("Extra ports:")
+						fmt.Println("Published ports (host:container):")
 						for _, m := range s.ExtraPorts {
 							fmt.Printf("  - %s\n", m)
 						}
@@ -111,7 +97,7 @@ func NewPortsListCmd() *cobra.Command {
 				fmt.Println()
 				fmt.Println("Available services:")
 				for _, s := range a.Services {
-					fmt.Printf("  - %s (port: %d)\n", s.Name, s.Port)
+					fmt.Printf("  - %s\n", s.Name)
 				}
 			}
 		},

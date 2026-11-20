@@ -2,16 +2,19 @@ package commands
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
 
 	"github.com/maxvegac/portico/src/internal/addon"
 	"github.com/maxvegac/portico/src/internal/app"
 	"github.com/maxvegac/portico/src/internal/config"
-	"github.com/maxvegac/portico/src/internal/docker"
+	"github.com/maxvegac/portico/src/internal/util"
 )
 
 // NewAddonLinkCmd links an app to an addon instance and adds environment variables
@@ -54,7 +57,7 @@ func NewAddonLinkCmd() *cobra.Command {
 			}
 
 			// Check if addon is a database type
-			if instance.Type != "postgresql" && instance.Type != "mysql" && instance.Type != "mariadb" && instance.Type != "mongodb" {
+			if !databaseTypes[instance.Type] {
 				fmt.Printf("Error: addon instance %s is not a database type\n", addonInstanceName)
 				return
 			}
@@ -67,9 +70,13 @@ func NewAddonLinkCmd() *cobra.Command {
 				return
 			}
 
-			// Use default database name if not provided
+			// Use default database name if not provided (app names may contain '-')
 			if dbName == "" {
-				dbName = appName // Default to app name
+				dbName = strings.ReplaceAll(appName, "-", "_")
+			}
+			if err := util.ValidateDBIdentifier(dbName); err != nil {
+				fmt.Printf("Error: %v\n", err)
+				return
 			}
 
 			// Read secrets from addon instance
@@ -83,36 +90,45 @@ func NewAddonLinkCmd() *cobra.Command {
 				dbUser = readSecret(filepath.Join(secretsDir, "db_name")) // Fallback
 			}
 
-			// Generate environment variables based on database type
-			envPrefix := getEnvPrefix(instance.Type)
-			envVars := make(map[string]string)
+			// Apps connect over portico-network: host is the instance alias, port the container port
+			host := addonHost(instanceDir, instance)
+			port := internalPort(am, instance)
 
-			switch instance.Type {
-			case "postgresql":
-				envVars[envPrefix+"HOST"] = addonInstanceName
-				envVars[envPrefix+"PORT"] = strconv.Itoa(instance.Port)
-				envVars[envPrefix+"DATABASE"] = dbName
-				envVars[envPrefix+"USER"] = dbUser
-				envVars[envPrefix+"PASSWORD"] = dbPassword
-				envVars[envPrefix+"DB"] = dbName // Alternative name
-			case "mysql", "mariadb":
-				envVars[envPrefix+"HOST"] = addonInstanceName
-				envVars[envPrefix+"PORT"] = strconv.Itoa(instance.Port)
-				envVars[envPrefix+"DATABASE"] = dbName
-				envVars[envPrefix+"DB"] = dbName
-				envVars[envPrefix+"USER"] = dbUser
-				envVars[envPrefix+"PASSWORD"] = dbPassword
-			case "mongodb":
-				envVars[envPrefix+"HOST"] = addonInstanceName
-				envVars[envPrefix+"PORT"] = strconv.Itoa(instance.Port)
-				envVars[envPrefix+"DATABASE"] = dbName
-				envVars[envPrefix+"DB"] = dbName
-				envVars[envPrefix+"USERNAME"] = dbUser
-				envVars[envPrefix+"PASSWORD"] = dbPassword
+			// Make sure the database exists
+			if output, err := databaseQuery(instanceDir, instance.Type, createDatabaseQuery(instance.Type, dbName, databaseAppUser(instanceDir))); err != nil {
+				if !strings.Contains(strings.ToLower(string(output)), "exists") {
+					fmt.Printf("Warning: could not create database %s (is the instance running?): %s\n", dbName, strings.TrimSpace(string(output)))
+				}
 			}
 
-			// Add environment variables to all services in the app
+			// Generate environment variables based on database type
+			envPrefix := getEnvPrefix(instance.Type)
+			envVars := map[string]string{
+				envPrefix + "HOST":     host,
+				envPrefix + "PORT":     strconv.Itoa(port),
+				envPrefix + "DATABASE": dbName,
+				envPrefix + "DB":       dbName, // Alternative name
+				envPrefix + "PASSWORD": dbPassword,
+			}
+			userInfo := url.UserPassword(dbUser, dbPassword).String()
+			switch instance.Type {
+			case "postgresql":
+				envVars[envPrefix+"USER"] = dbUser
+				envVars[envPrefix+"URL"] = fmt.Sprintf("postgres://%s@%s:%d/%s", userInfo, host, port, dbName)
+			case "mysql", "mariadb":
+				envVars[envPrefix+"USER"] = dbUser
+				envVars[envPrefix+"URL"] = fmt.Sprintf("mysql://%s@%s:%d/%s", userInfo, host, port, dbName)
+			case "mongodb":
+				envVars[envPrefix+"USERNAME"] = dbUser
+				envVars[envPrefix+"URL"] = fmt.Sprintf("mongodb://%s@%s:%d/%s?authSource=admin", userInfo, host, port, dbName)
+			}
+
+			// Add environment variables to all services in the app (except inline
+			// addons such as redis, which don't need database credentials)
 			for i := range a.Services {
+				if inlineAddonTypes[a.Services[i].Name] {
+					continue
+				}
 				if a.Services[i].Environment == nil {
 					a.Services[i].Environment = make(map[string]string)
 				}
@@ -140,51 +156,14 @@ func NewAddonLinkCmd() *cobra.Command {
 				}
 			}
 
-			// Save app
-			if err := appManager.SaveApp(a); err != nil {
-				fmt.Printf("Error saving app: %v\n", err)
-				return
-			}
-
 			// Regenerate docker-compose and redeploy
-			dm := docker.NewManager(cfg.Registry.URL)
-			appDir := filepath.Join(cfg.AppsDir, appName)
-			var dockerServices []docker.Service
-			for _, s := range a.Services {
-				replicas := s.Replicas
-				if replicas == 0 {
-					replicas = 1 // Default to 1 if not specified
-				}
-				dockerServices = append(dockerServices, docker.Service{
-					Name:        s.Name,
-					Image:       s.Image,
-					Port:        s.Port,
-					ExtraPorts:  s.ExtraPorts,
-					Environment: s.Environment,
-					Volumes:     s.Volumes,
-					Secrets:     s.Secrets,
-					DependsOn:   s.DependsOn,
-					Replicas:    replicas,
-				})
-			}
-
-			metadata := &docker.PorticoMetadata{
-				Domain: a.Domain,
-				Port:   a.Port,
-			}
-
-			if err := dm.GenerateDockerCompose(appDir, dockerServices, metadata); err != nil {
-				fmt.Printf("Error generating docker compose: %v\n", err)
-				return
-			}
-
-			if err := dm.DeployApp(appDir, dockerServices); err != nil {
-				fmt.Printf("Error deploying app: %v\n", err)
+			if err := applyApp(cfg, appManager, a); err != nil {
+				fmt.Printf("Error: %v\n", err)
 				return
 			}
 
 			fmt.Printf("App %s linked to addon %s with database %s\n", appName, addonInstanceName, dbName)
-			fmt.Printf("Environment variables added to all services\n")
+			fmt.Printf("Environment variables added to the app services (%sURL, %sHOST, ...)\n", envPrefix, envPrefix)
 		},
 	}
 
@@ -212,5 +191,34 @@ func readSecret(path string) string {
 	if err != nil {
 		return ""
 	}
-	return string(data)
+	return strings.TrimSpace(string(data))
+}
+
+// internalPort returns the container port of an addon instance
+func internalPort(am *addon.Manager, instance addon.Instance) int {
+	if def, err := am.LoadDefinition(instance.Type); err == nil {
+		if versionConfig, err := def.GetVersionConfig(instance.Version); err == nil && len(versionConfig.Ports) > 0 {
+			return versionConfig.Ports[0].Internal
+		}
+		if def.DefaultPort > 0 {
+			return def.DefaultPort
+		}
+	}
+	return instance.Port
+}
+
+// addonHost returns the hostname apps use to reach an addon instance on portico-network
+func addonHost(instanceDir string, instance addon.Instance) string {
+	data, err := os.ReadFile(filepath.Join(instanceDir, "docker-compose.yml"))
+	if err == nil {
+		var compose struct {
+			Name string `yaml:"name"`
+		}
+		if yaml.Unmarshal(data, &compose) == nil && compose.Name == util.AddonPrefix+instance.Name {
+			return util.AddonPrefix + instance.Name // namespaced alias
+		}
+	}
+	// Instances created by older versions have no alias: use the container name
+	// (compose project = directory name)
+	return fmt.Sprintf("%s-%s-1", instance.Name, instance.Type)
 }

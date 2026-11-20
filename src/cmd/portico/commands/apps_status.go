@@ -55,7 +55,7 @@ func NewAppsStatusCmd() *cobra.Command {
 			}
 
 			// Get container status using docker compose ps
-			cmd := exec.Command("docker", "compose", "-f", composeFile, "ps", "--format", "json")
+			cmd := exec.Command("docker", "compose", "-f", composeFile, "-p", appName, "ps", "-a", "--format", "json")
 			cmd.Dir = appDir
 
 			output, err := cmd.Output()
@@ -65,18 +65,29 @@ func NewAppsStatusCmd() *cobra.Command {
 			}
 
 			// Parse container information
-			containers := make(map[string]ContainerInfo)
-			if len(output) > 0 {
-				lines := strings.Split(strings.TrimSpace(string(output)), "\n")
-				for _, line := range lines {
-					line = strings.TrimSpace(line)
-					if line == "" {
-						continue
-					}
+			// Compose >= 2.21 prints one JSON object per line, older versions a JSON array
+			var parsed []ContainerInfo
+			trimmed := strings.TrimSpace(string(output))
+			if strings.HasPrefix(trimmed, "[") {
+				_ = json.Unmarshal([]byte(trimmed), &parsed)
+			} else {
+				for _, line := range strings.Split(trimmed, "\n") {
 					var container ContainerInfo
-					if err := json.Unmarshal([]byte(line), &container); err == nil {
-						containers[container.Service] = container
+					if line = strings.TrimSpace(line); line != "" && json.Unmarshal([]byte(line), &container) == nil {
+						parsed = append(parsed, container)
 					}
+				}
+			}
+
+			// One entry per service (prefer a running replica), plus running counts
+			containers := make(map[string]ContainerInfo)
+			running := make(map[string]int)
+			for _, container := range parsed {
+				if strings.EqualFold(container.State, "running") {
+					running[container.Service]++
+				}
+				if existing, ok := containers[container.Service]; !ok || !strings.EqualFold(existing.State, "running") {
+					containers[container.Service] = container
 				}
 			}
 
@@ -86,7 +97,9 @@ func NewAppsStatusCmd() *cobra.Command {
 				fmt.Printf("🌐 Domain: %s\n", a.Domain)
 			}
 			if a.Port > 0 {
-				fmt.Printf("🔌 Port: %d\n", a.Port)
+				fmt.Printf("🔌 HTTP: %s -> %s:%d\n", appURL(a), a.HTTPServiceName(), a.Port)
+			} else {
+				fmt.Println("🔌 HTTP: disabled (background worker)")
 			}
 			fmt.Println()
 
@@ -136,10 +149,16 @@ func NewAppsStatusCmd() *cobra.Command {
 				fmt.Printf("  %s %s\n", statusIcon, svc.Name)
 				fmt.Printf("    Image:     %s\n", svc.Image)
 
-				if svc.Port > 0 {
-					fmt.Printf("    Port:      %d\n", svc.Port)
+				if a.Port > 0 && svc.Name == a.HTTPServiceName() {
+					fmt.Printf("    HTTP:      port %d (via Caddy)\n", a.Port)
+				}
+				if len(svc.ExtraPorts) > 0 {
+					fmt.Printf("    Ports:     %s\n", strings.Join(svc.ExtraPorts, ", "))
 				}
 
+				if svc.Replicas > 1 {
+					statusText = fmt.Sprintf("%s (%d/%d replicas running)", statusText, running[svc.Name], svc.Replicas)
+				}
 				fmt.Printf("    Status:    %s", statusText)
 				if exists && container.Status != "" && state != "running" {
 					fmt.Printf(" (%s)", container.Status)
@@ -148,11 +167,6 @@ func NewAppsStatusCmd() *cobra.Command {
 
 				if container.Name != "" {
 					fmt.Printf("    Container: %s\n", container.Name)
-				}
-
-				// Show extra ports if any
-				if len(svc.ExtraPorts) > 0 {
-					fmt.Printf("    Ports:     %s\n", strings.Join(svc.ExtraPorts, ", "))
 				}
 			}
 

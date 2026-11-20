@@ -18,8 +18,14 @@ func NewAppsExecCmd() *cobra.Command {
 		Use:   "exec [app-name] [[service] [command...]]",
 		Short: "Execute command in application container",
 		Long:  "Execute a command in a service container. If service name is provided as second argument, it will be used. Otherwise, uses default service.\n\nExamples:\n  portico exec my-app ls -la\n  portico exec my-app database psql -U postgres",
-		Args:  cobra.MinimumNArgs(2),
-		Run: func(_ *cobra.Command, args []string) {
+		Args:  cobra.ArbitraryArgs,
+		// The command's own flags (e.g. ls -la) must reach the container untouched
+		DisableFlagParsing: true,
+		Run: func(c *cobra.Command, args []string) {
+			if len(args) < 2 || args[0] == "-h" || args[0] == "--help" {
+				_ = c.Help()
+				return
+			}
 			appName := args[0]
 			remainingArgs := args[1:]
 
@@ -90,7 +96,11 @@ func NewAppsExecCmd() *cobra.Command {
 			}
 
 			// Build docker compose exec command
-			execArgs := []string{"compose", "-f", composeFile, "exec", serviceName}
+			execArgs := []string{"compose", "-f", composeFile, "-p", appName, "exec"}
+			if !stdinIsTerminal() {
+				execArgs = append(execArgs, "-T") // no TTY available (CI, pipes)
+			}
+			execArgs = append(execArgs, serviceName)
 			execArgs = append(execArgs, command...)
 
 			cmd := exec.Command("docker", execArgs...)
@@ -110,4 +120,10 @@ func NewAppsExecCmd() *cobra.Command {
 	}
 
 	return cmd
+}
+
+// stdinIsTerminal reports whether stdin is an interactive terminal
+func stdinIsTerminal() bool {
+	info, err := os.Stdin.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }

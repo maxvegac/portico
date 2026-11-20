@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/viper"
 
 	"github.com/maxvegac/portico/src/internal/embed"
+	"github.com/maxvegac/portico/src/internal/util"
 )
 
 // Config represents the Portico configuration
@@ -44,19 +45,17 @@ func canAccessPorticoHome() bool {
 	return true
 }
 
-// getConfigPaths returns appropriate config paths based on execution context
+// getConfigPaths returns the directories searched for config.yml.
+// The current directory is deliberately NOT searched: commands such as
+// `portico deploy` run inside user projects, which often have their own config.yml.
 func getConfigPaths() []string {
-	paths := []string{
-		".", // Current directory
-	}
-
-	// Add system paths based on access level
+	var paths []string
 	if isRunningAsRoot() {
-		paths = append(paths, "/etc/portico", "/home/portico") // System-wide config and Portico home
-	} else if canAccessPorticoHome() {
-		paths = append(paths, "/home/portico") // Portico home
+		paths = append(paths, "/etc/portico")
 	}
-
+	if canAccessPorticoHome() {
+		paths = append(paths, "/home/portico")
+	}
 	return paths
 }
 
@@ -65,9 +64,13 @@ func LoadConfig() (*Config, error) {
 	viper.SetConfigName("config")
 	viper.SetConfigType("yaml")
 
-	// Add config paths based on execution context
-	for _, path := range getConfigPaths() {
-		viper.AddConfigPath(path)
+	// PORTICO_CONFIG points to an explicit config file (useful for testing)
+	if explicit := os.Getenv("PORTICO_CONFIG"); explicit != "" {
+		viper.SetConfigFile(explicit)
+	} else {
+		for _, path := range getConfigPaths() {
+			viper.AddConfigPath(path)
+		}
 	}
 
 	// Set default values
@@ -90,6 +93,7 @@ func LoadConfig() (*Config, error) {
 		}
 		configPath := filepath.Join(porticoHome, "config.yml")
 		if err := embed.ExtractStaticFile("static/config.yml", configPath); err == nil {
+			_ = util.FixFileOwnership(configPath)
 			// Try reading again after creating from embed
 			viper.SetConfigFile(configPath)
 			if err := viper.ReadInConfig(); err != nil {
@@ -139,5 +143,10 @@ func (c *Config) SaveConfig() error {
 	}
 	viper.Set("registry", c.Registry)
 
-	return viper.WriteConfigAs(configPath)
+	if err := viper.WriteConfigAs(configPath); err != nil {
+		return err
+	}
+	// Keep the file owned by the portico user when written as root
+	_ = util.FixFileOwnership(configPath)
+	return nil
 }

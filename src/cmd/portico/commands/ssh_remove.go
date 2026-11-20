@@ -1,10 +1,7 @@
 package commands
 
 import (
-	"bufio"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -15,17 +12,16 @@ import (
 
 // NewSSHRemoveCmd removes an SSH public key
 func NewSSHRemoveCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "remove [index|key]",
+	return &cobra.Command{
+		Use:   "remove [index|name|fingerprint|key]",
 		Short: "Remove an SSH public key",
-		Long: `Remove an SSH public key by index (from 'portico ssh list') or by key content.
+		Long: `Remove an SSH public key by index or name (from 'portico ssh list'),
+by fingerprint (SHA256:...) or by the full public key.
 
 Examples:
-  # Remove by index (from list command)
   portico ssh remove 1
-
-  # Remove by key content (partial match)
-  portico ssh remove "ssh-rsa AAAAB3..."`,
+  portico ssh remove ci-deployment
+  portico ssh remove SHA256:abc123...`,
 		Args: cobra.ExactArgs(1),
 		Run: func(_ *cobra.Command, args []string) {
 			cfg, err := config.LoadConfig()
@@ -34,88 +30,55 @@ Examples:
 				return
 			}
 
-			porticoHome := cfg.PorticoHome
-			authorizedKeysPath := filepath.Join(porticoHome, ".ssh", "authorized_keys")
-
-			file, err := os.Open(authorizedKeysPath)
+			path := authorizedKeysPath(cfg.PorticoHome)
+			lines, err := readAuthorizedKeys(path)
 			if err != nil {
-				if os.IsNotExist(err) {
-					fmt.Println("No SSH keys configured")
-					return
-				}
 				fmt.Printf("Error reading authorized_keys: %v\n", err)
 				return
 			}
-			defer func() {
-				_ = file.Close()
-			}()
 
-			// Read all keys
-			var lines []string
-			scanner := bufio.NewScanner(file)
-			for scanner.Scan() {
-				lines = append(lines, scanner.Text())
+			arg := strings.TrimSpace(args[0])
+			index, indexErr := strconv.Atoi(arg)
+			var argKeyData string
+			if k, err := parseAuthorizedKey(arg); err == nil {
+				argKeyData = k.Data
 			}
 
-			if err := scanner.Err(); err != nil {
-				fmt.Printf("Error reading file: %v\n", err)
+			// Exact matches only: a substring match could remove every key
+			var kept []string
+			var removed []string
+			keyIndex := 0
+			for _, line := range lines {
+				key, err := parseAuthorizedKey(line)
+				if err != nil {
+					kept = append(kept, line) // keep comments and unknown lines
+					continue
+				}
+				keyIndex++
+
+				match := (indexErr == nil && keyIndex == index) ||
+					key.Comment == arg ||
+					key.Fingerprint() == arg ||
+					key.Data == arg ||
+					(argKeyData != "" && key.Data == argKeyData)
+				if match {
+					removed = append(removed, key.Comment)
+					continue
+				}
+				kept = append(kept, line)
+			}
+
+			if len(removed) == 0 {
+				fmt.Printf("No key found matching %q. Use 'portico ssh list' to see available keys\n", arg)
 				return
 			}
 
-			// Determine if argument is index or key content
-			arg := strings.TrimSpace(args[0])
-			index, err := strconv.Atoi(arg)
-
-			var keysToRemove []int
-			if err == nil {
-				// It's an index
-				if index < 1 || index > len(lines) {
-					fmt.Printf("Error: Invalid index %d. Use 'portico ssh list' to see available keys\n", index)
-					return
-				}
-
-				// Count non-empty, non-comment lines
-				validLineNum := 0
-				for i, line := range lines {
-					line = strings.TrimSpace(line)
-					if line != "" && !strings.HasPrefix(line, "#") {
-						validLineNum++
-						if validLineNum == index {
-							keysToRemove = append(keysToRemove, i)
-							break
-						}
-					}
-				}
-			} else {
-				// It's a key content (partial match)
-				for i, line := range lines {
-					line = strings.TrimSpace(line)
-					if line != "" && !strings.HasPrefix(line, "#") && strings.Contains(line, arg) {
-						keysToRemove = append(keysToRemove, i)
-					}
-				}
-
-				if len(keysToRemove) == 0 {
-					fmt.Printf("No keys found matching: %s\n", arg)
-					return
-				}
-			}
-
-			// Remove keys (in reverse order to maintain indices)
-			for i := len(keysToRemove) - 1; i >= 0; i-- {
-				idx := keysToRemove[i]
-				lines = append(lines[:idx], lines[idx+1:]...)
-			}
-
-			// Write back to file
-			if err := os.WriteFile(authorizedKeysPath, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+			if err := writeAuthorizedKeys(path, kept); err != nil {
 				fmt.Printf("Error writing authorized_keys: %v\n", err)
 				return
 			}
 
-			fmt.Printf("✅ Removed %d SSH key(s)\n", len(keysToRemove))
+			fmt.Printf("✅ Removed %d SSH key(s): %s\n", len(removed), strings.Join(removed, ", "))
 		},
 	}
-
-	return cmd
 }

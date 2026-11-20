@@ -12,7 +12,6 @@ Portico provides a secure way to manage application secrets using Docker secrets
 
 ```
 /home/portico/apps/my-app/
-├── app.yml
 ├── docker-compose.yml
 ├── Caddyfile
 └── env/                    # Secrets directory

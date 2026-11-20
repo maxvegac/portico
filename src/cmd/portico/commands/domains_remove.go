@@ -2,12 +2,12 @@ package commands
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/spf13/cobra"
 
 	"github.com/maxvegac/portico/src/internal/app"
 	"github.com/maxvegac/portico/src/internal/config"
-	"github.com/maxvegac/portico/src/internal/proxy"
 )
 
 // NewDomainsRemoveCmd removes a domain from an application
@@ -40,30 +40,28 @@ func NewDomainsRemoveCmd() *cobra.Command {
 				return
 			}
 
-			if a.Domain != domain {
+			if !strings.EqualFold(a.Domain, domain) {
 				fmt.Printf("Domain %s not found for app %s (current domain: %s)\n", domain, appName, a.Domain)
 				return
 			}
 
-			// Remove domain (set to empty or default)
-			a.Domain = fmt.Sprintf("%s.sslip.io", appName)
+			// Fall back to the default appname.IP.sslip.io domain
+			defaultDomain, err := app.DefaultDomain(appName)
+			if err != nil {
+				fmt.Printf("Error: %v\n", err)
+				return
+			}
+			a.Domain = defaultDomain
 			if err := am.SaveApp(a); err != nil {
 				fmt.Printf("Error saving app: %v\n", err)
 				return
 			}
-
-			if err := am.CreateDefaultCaddyfile(appName); err != nil {
-				fmt.Printf("Error updating app Caddyfile: %v\n", err)
+			if err := syncProxy(cfg, am, a); err != nil {
+				fmt.Printf("Error: %v\n", err)
 				return
 			}
 
-			pm := proxy.NewCaddyManager(cfg.ProxyDir, cfg.TemplatesDir)
-			if err := pm.UpdateCaddyfile(cfg.AppsDir); err != nil {
-				fmt.Printf("Error updating proxy Caddyfile: %v\n", err)
-				return
-			}
-
-			fmt.Printf("Domain %s removed from %s\n", domain, appName)
+			fmt.Printf("Domain %s removed from %s (now %s)\n", domain, appName, a.Domain)
 		},
 	}
 }

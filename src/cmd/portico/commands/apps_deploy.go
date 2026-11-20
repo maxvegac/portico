@@ -3,15 +3,13 @@ package commands
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 
 	"github.com/spf13/cobra"
 
 	"github.com/maxvegac/portico/src/internal/app"
 	"github.com/maxvegac/portico/src/internal/config"
-	"github.com/maxvegac/portico/src/internal/docker"
-	"github.com/maxvegac/portico/src/internal/proxy"
+	"github.com/maxvegac/portico/src/internal/util"
 )
 
 // NewAppsDeployCmd creates the apps deploy command
@@ -20,6 +18,7 @@ func NewAppsDeployCmd() *cobra.Command {
 	var dockerfile string
 	var imageName string
 	var buildArgs []string
+	var service string
 
 	cmd := &cobra.Command{
 		Use:   "deploy [app-name]",
@@ -83,115 +82,47 @@ Examples:
 				imageName = fmt.Sprintf("portico-%s:latest", appName)
 			}
 
-			appDir := filepath.Join(cfg.AppsDir, appName)
 			appManager := app.NewManager(cfg.AppsDir, cfg.TemplatesDir)
-
-			// Check if app exists, if not create it
-			if _, err := appManager.LoadApp(appName); err != nil {
-				fmt.Printf("App %s not found. Creating app...\n", appName)
-				if err := appManager.CreateAppDirectories(appName); err != nil {
-					fmt.Printf("Error creating app directories: %v\n", err)
-					return
-				}
+			if err := util.ValidateAppName(appName); err != nil {
+				fmt.Printf("Error: %v\n", err)
+				return
 			}
 
 			// Build Docker image
 			fmt.Printf("Building Docker image: %s\n", imageName)
 			fmt.Printf("Source: %s\n", absSourcePath)
 			fmt.Printf("Dockerfile: %s\n", dockerfilePath)
-
-			buildCmd := exec.Command("docker", "build", "-t", imageName, "-f", dockerfilePath, absSourcePath)
-
-			// Add build arguments
-			for _, arg := range buildArgs {
-				buildCmd.Args = append(buildCmd.Args, "--build-arg", arg)
-			}
-
-			buildCmd.Stdout = os.Stdout
-			buildCmd.Stderr = os.Stderr
-
-			if err := buildCmd.Run(); err != nil {
+			if err := buildImage(imageName, dockerfilePath, absSourcePath, buildArgs); err != nil {
 				fmt.Printf("Error building Docker image: %v\n", err)
 				return
 			}
-
 			fmt.Printf("✅ Docker image built successfully: %s\n", imageName)
 
-			// Load or create app configuration
-			appConfig, err := appManager.LoadApp(appName)
+			// Load (or create) the app and point its HTTP service at the new image
+			appConfig, err := loadOrCreateApp(cfg, appManager, appName)
 			if err != nil {
-				// Create default app config
-				appConfig = &app.App{
-					Name:   appName,
-					Domain: fmt.Sprintf("%s.sslip.io", appName),
-					Port:   8080,
-					Services: []app.Service{
-						{
-							Name:  "web",
-							Image: imageName,
-							Port:  3000,
-						},
-					},
-				}
-			} else {
-				// Update image in existing services
-				for i := range appConfig.Services {
-					appConfig.Services[i].Image = imageName
-				}
-			}
-
-			// Generate docker-compose.yml
-			dockerManager := docker.NewManager(cfg.Registry.URL)
-			var dockerServices []docker.Service
-			for _, svc := range appConfig.Services {
-				replicas := svc.Replicas
-				if replicas == 0 {
-					replicas = 1 // Default to 1 if not specified
-				}
-				dockerServices = append(dockerServices, docker.Service{
-					Name:        svc.Name,
-					Image:       svc.Image,
-					Port:        svc.Port,
-					ExtraPorts:  svc.ExtraPorts,
-					Environment: svc.Environment,
-					Volumes:     svc.Volumes,
-					Secrets:     svc.Secrets,
-					DependsOn:   svc.DependsOn,
-					Replicas:    replicas,
-				})
-			}
-
-			metadata := &docker.PorticoMetadata{
-				Domain: appConfig.Domain,
-				Port:   appConfig.Port,
-			}
-
-			if err := dockerManager.GenerateDockerCompose(appDir, dockerServices, metadata); err != nil {
-				fmt.Printf("Error generating docker compose: %v\n", err)
+				fmt.Printf("Error: %v\n", err)
 				return
 			}
+			serviceName, _ := setServiceImage(appConfig, service, imageName)
 
-			// Deploy the application
-			if err := dockerManager.DeployApp(appDir, dockerServices); err != nil {
-				fmt.Printf("Error deploying app: %v\n", err)
-				return
-			}
-
-			// Update Caddyfile
-			proxyManager := proxy.NewCaddyManager(cfg.ProxyDir, cfg.TemplatesDir)
-			if err := proxyManager.UpdateCaddyfile(cfg.AppsDir); err != nil {
-				fmt.Printf("Error updating Caddyfile: %v\n", err)
+			if err := applyApp(cfg, appManager, appConfig); err != nil {
+				fmt.Printf("Error: %v\n", err)
 				return
 			}
 
 			fmt.Printf("✅ Application %s deployed successfully!\n", appName)
-			fmt.Printf("Image: %s\n", imageName)
+			fmt.Printf("Service: %s, Image: %s\n", serviceName, imageName)
+			if url := appURL(appConfig); url != "" {
+				fmt.Printf("URL: %s\n", url)
+			}
 		},
 	}
 
 	cmd.Flags().StringVar(&sourcePath, "from", "", "Source code directory (default: current directory, used only for manual deployments)")
 	cmd.Flags().StringVar(&dockerfile, "dockerfile", "Dockerfile", "Dockerfile name or path (default: Dockerfile)")
 	cmd.Flags().StringVar(&imageName, "image", "", "Docker image name (default: portico-<app-name>:latest)")
+	cmd.Flags().StringVar(&service, "service", "", "Service to update (default: the HTTP service, or 'web')")
 	cmd.Flags().StringArrayVar(&buildArgs, "build-arg", []string{}, "Build arguments for docker build (can be specified multiple times)")
 
 	return cmd

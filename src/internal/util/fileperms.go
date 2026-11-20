@@ -57,11 +57,38 @@ func FixDirOwnership(dirPath string) error {
 		return fmt.Errorf("error parsing portico GID: %w", err)
 	}
 
-	// Change ownership recursively
+	// Change ownership recursively. Lchown: never follow symlinks out of the tree.
 	return filepath.Walk(dirPath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
-		return os.Chown(path, uid, gid)
+		return os.Lchown(path, uid, gid)
 	})
+}
+
+// WriteFileAtomic writes data to a temporary file in the same directory and renames it
+// over path, so readers never observe a partially written file.
+// Note: when path is bind-mounted as a single file into a container, prefer os.WriteFile
+// (rename replaces the inode and the container would keep seeing the old file).
+func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer func() { _ = os.Remove(tmpName) }()
+
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(perm); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
 }

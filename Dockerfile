@@ -1,29 +1,27 @@
 # Build stage
 FROM golang:1.21-alpine AS builder
 
+ARG VERSION=dev
+
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN go build -o portico ./cmd/portico
+# Static files and templates are embedded in the binary
+RUN CGO_ENABLED=0 go build -ldflags "-X main.version=${VERSION}" -o portico ./src/cmd/portico
 
 # Runtime stage
-FROM alpine:latest
+FROM alpine:3.20
 
-RUN apk --no-cache add ca-certificates docker-compose caddy
-WORKDIR /root
+RUN apk --no-cache add ca-certificates docker-cli docker-cli-compose git
 
 COPY --from=builder /app/portico /usr/local/bin/portico
-RUN chmod +x /usr/local/bin/portico
-
-# Copy static files
-COPY static/ /home/portico/static/
 
 # Create portico user
-RUN adduser -D -s /bin/sh portico
-RUN mkdir -p /home/portico/{apps,reverse-proxy,static}
-RUN chown -R portico:portico /home/portico
+RUN adduser -D -s /bin/sh portico \
+    && mkdir -p /home/portico/apps /home/portico/reverse-proxy /home/portico/www \
+    && chown -R portico:portico /home/portico
 
 USER portico
 WORKDIR /home/portico

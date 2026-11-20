@@ -1,16 +1,14 @@
 package commands
 
 import (
-	"crypto/sha256"
 	"fmt"
-	"os"
 	"path/filepath"
 
 	"github.com/spf13/cobra"
-	"gopkg.in/yaml.v3"
 
 	"github.com/maxvegac/portico/src/internal/config"
 	"github.com/maxvegac/portico/src/internal/docker"
+	"github.com/maxvegac/portico/src/internal/util"
 )
 
 // NewAppsPreserveCmd creates the apps preserve command
@@ -31,6 +29,10 @@ func NewAppsPreserveCmd() *cobra.Command {
 				return
 			}
 
+			if err := util.ValidateAppName(appName); err != nil {
+				fmt.Printf("Error: %v\n", err)
+				return
+			}
 			appDir := filepath.Join(cfg.AppsDir, appName)
 			dm := docker.NewManager(cfg.Registry.URL)
 
@@ -47,70 +49,8 @@ func NewAppsPreserveCmd() *cobra.Command {
 			}
 
 			// Load current compose file
-			compose, err := dm.LoadComposeFile(appDir)
-			if err != nil {
-				fmt.Printf("Error loading docker-compose.yml: %v\n", err)
-				return
-			}
-
-			// Calculate current hash (without the hash field itself)
-			composeFile := filepath.Join(appDir, "docker-compose.yml")
-			currentData, err := os.ReadFile(composeFile)
-			if err != nil {
-				fmt.Printf("Error reading docker-compose.yml: %v\n", err)
-				return
-			}
-
-			// Parse to get current content
-			var currentCompose struct {
-				Services map[string]interface{}  `yaml:"services"`
-				Networks map[string]interface{}  `yaml:"networks,omitempty"`
-				Secrets  map[string]interface{}  `yaml:"secrets,omitempty"`
-				XPortico *docker.PorticoMetadata `yaml:"x-portico,omitempty"`
-			}
-			if err := yaml.Unmarshal(currentData, &currentCompose); err != nil {
-				fmt.Printf("Error parsing docker-compose.yml: %v\n", err)
-				return
-			}
-
-			// Remove hash for calculation
-			if currentCompose.XPortico != nil {
-				currentCompose.XPortico.Generated = ""
-			}
-
-			// Calculate new hash
-			dataWithoutHash, err := yaml.Marshal(&currentCompose)
-			if err != nil {
-				fmt.Printf("Error marshaling: %v\n", err)
-				return
-			}
-
-			hash := sha256.Sum256(dataWithoutHash)
-			hashStr := fmt.Sprintf("%x", hash)
-
-			// Update metadata with new hash
-			if compose.XPortico == nil {
-				compose.XPortico = &docker.PorticoMetadata{}
-			}
-			compose.XPortico.Generated = hashStr
-
-			// Save updated compose file
-			// We need to preserve all existing fields
-			composeToSave := &docker.ComposeFile{
-				Services: compose.Services,
-				Networks: compose.Networks,
-				Secrets:  compose.Secrets,
-				XPortico: compose.XPortico,
-			}
-
-			data, err := yaml.Marshal(composeToSave)
-			if err != nil {
-				fmt.Printf("Error marshaling updated compose: %v\n", err)
-				return
-			}
-
-			if err := os.WriteFile(composeFile, data, 0o644); err != nil {
-				fmt.Printf("Error saving docker-compose.yml: %v\n", err)
+			if err := dm.AcceptManualChanges(appDir); err != nil {
+				fmt.Printf("Error preserving docker-compose.yml: %v\n", err)
 				return
 			}
 

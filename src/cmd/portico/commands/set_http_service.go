@@ -7,7 +7,6 @@ import (
 
 	"github.com/maxvegac/portico/src/internal/app"
 	"github.com/maxvegac/portico/src/internal/config"
-	"github.com/maxvegac/portico/src/internal/proxy"
 )
 
 // NewSetHttpServiceCmd sets which service to use for HTTP
@@ -15,14 +14,13 @@ func NewSetHttpServiceCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "http-service [service-name]",
 		Short: "Set which service to use for HTTP (Caddy will proxy to this service)",
-		Long:  "Set which service should be used for HTTP. Caddy will proxy requests to this service.",
+		Long:  "Set which service should receive HTTP traffic. Caddy will proxy requests to this service.\n\nExample:\n  portico set my-app http-service api",
 		Args:  cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
 			serviceName := args[0]
 
-			// Get app-name from parent command
-			appName, err := getAppNameFromSetArgs(cmd)
-			if err != nil || appName == "" {
+			appName, _ := getAppNameFromSetArgs(cmd)
+			if appName == "" {
 				fmt.Println("Error: app-name is required")
 				fmt.Println("Usage: portico set <app-name> http-service <service-name>")
 				return
@@ -41,55 +39,41 @@ func NewSetHttpServiceCmd() *cobra.Command {
 				return
 			}
 
-			// Find the service
-			var targetService *app.Service
-			for i := range a.Services {
-				if a.Services[i].Name == serviceName {
-					targetService = &a.Services[i]
-					break
-				}
-			}
-
-			if targetService == nil {
+			if a.FindService(serviceName) == nil {
 				fmt.Printf("Error: service '%s' not found in app %s\n", serviceName, appName)
-				fmt.Println("Available services:")
-				for _, s := range a.Services {
-					fmt.Printf("  - %s\n", s.Name)
-				}
+				printServices(a)
 				return
 			}
 
-			// Set HTTP port - use service port if configured, otherwise default to 8000
-			// This port is internal to the container, used by Caddy for reverse proxy
-			// It doesn't need to be exposed to the host
-			httpPort := targetService.Port
-			if httpPort == 0 {
-				httpPort = 8000
-				fmt.Printf("Using default HTTP port 8000 for service '%s' (internal container port)\n", serviceName)
+			a.HttpService = serviceName
+			// Keep the configured HTTP port; enable HTTP with the default port if it was off
+			if a.Port == 0 && a.DisabledHTTPPort > 0 {
+				a.Port = a.DisabledHTTPPort
+				fmt.Printf("HTTP was disabled; enabling it on internal port %d\n", a.Port)
+			}
+			if a.Port == 0 {
+				a.Port = app.DefaultHTTPPort
+				fmt.Printf("HTTP was disabled; enabling it on internal port %d (change with 'portico set %s http-port <port>')\n", a.Port, appName)
 			}
 
-			// Set this service as HTTP service
-			a.Port = httpPort
-
-			// Save app configuration (this regenerates docker-compose.yml with updated services)
 			if err := am.SaveApp(a); err != nil {
 				fmt.Printf("Error saving app: %v\n", err)
 				return
 			}
-
-			// Update Caddyfile (after docker-compose.yml has been updated)
-			if err := am.CreateDefaultCaddyfile(appName); err != nil {
-				fmt.Printf("Error: could not create Caddyfile: %v\n", err)
-				return
-			}
-
-			pm := proxy.NewCaddyManager(cfg.ProxyDir, cfg.TemplatesDir)
-			if err := pm.UpdateCaddyfile(cfg.AppsDir); err != nil {
-				fmt.Printf("Error updating proxy Caddyfile: %v\n", err)
+			if err := syncProxy(cfg, am, a); err != nil {
+				fmt.Printf("Error: %v\n", err)
 				return
 			}
 
 			fmt.Printf("HTTP service set to '%s' (internal port: %d) for app %s\n", serviceName, a.Port, appName)
 		},
+	}
+}
+
+// printServices lists the services of an app
+func printServices(a *app.App) {
+	fmt.Println("Available services:")
+	for _, s := range a.Services {
+		fmt.Printf("  - %s\n", s.Name)
 	}
 }

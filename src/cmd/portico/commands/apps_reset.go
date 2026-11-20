@@ -2,14 +2,11 @@ package commands
 
 import (
 	"fmt"
-	"path/filepath"
 
 	"github.com/spf13/cobra"
 
 	"github.com/maxvegac/portico/src/internal/app"
 	"github.com/maxvegac/portico/src/internal/config"
-	"github.com/maxvegac/portico/src/internal/docker"
-	"github.com/maxvegac/portico/src/internal/proxy"
 )
 
 // NewAppsResetCmd creates the apps reset command
@@ -24,14 +21,14 @@ func NewAppsResetCmd() *cobra.Command {
 			fmt.Printf("Resetting application: %s\n", appName)
 
 			// Load config
-			config, err := config.LoadConfig()
+			cfg, err := config.LoadConfig()
 			if err != nil {
 				fmt.Printf("Error loading config: %v\n", err)
 				return
 			}
 
 			// Create app manager
-			appManager := app.NewManager(config.AppsDir, config.TemplatesDir)
+			appManager := app.NewManager(cfg.AppsDir, cfg.TemplatesDir)
 
 			// Load app configuration
 			appConfig, err := appManager.LoadApp(appName)
@@ -40,52 +37,9 @@ func NewAppsResetCmd() *cobra.Command {
 				return
 			}
 
-			// Create docker manager
-			dockerManager := docker.NewManager(config.Registry.URL)
-
-			// Generate docker-compose.yml
-			appDir := filepath.Join(config.AppsDir, appName)
-
-			// Convert app.Service to docker.Service
-			var dockerServices []docker.Service
-			for _, service := range appConfig.Services {
-				replicas := service.Replicas
-				if replicas == 0 {
-					replicas = 1 // Default to 1 if not specified
-				}
-				dockerServices = append(dockerServices, docker.Service{
-					Name:        service.Name,
-					Image:       service.Image,
-					Port:        service.Port,
-					ExtraPorts:  service.ExtraPorts,
-					Environment: service.Environment,
-					Volumes:     service.Volumes,
-					Secrets:     service.Secrets,
-					DependsOn:   service.DependsOn,
-					Replicas:    replicas,
-				})
-			}
-
-			metadata := &docker.PorticoMetadata{
-				Domain: appConfig.Domain,
-				Port:   appConfig.Port,
-			}
-
-			if err := dockerManager.GenerateDockerCompose(appDir, dockerServices, metadata); err != nil {
-				fmt.Printf("Error generating docker compose: %v\n", err)
-				return
-			}
-
-			// Deploy the application
-			if err := dockerManager.DeployApp(appDir, dockerServices); err != nil {
-				fmt.Printf("Error redeploying app: %v\n", err)
-				return
-			}
-
-			// Update Caddyfile
-			proxyManager := proxy.NewCaddyManager(config.ProxyDir, config.TemplatesDir)
-			if err := proxyManager.UpdateCaddyfile(config.AppsDir); err != nil {
-				fmt.Printf("Error updating Caddyfile: %v\n", err)
+			// Regenerate docker-compose.yml and Caddyfile, redeploy and reload the proxy
+			if err := applyApp(cfg, appManager, appConfig); err != nil {
+				fmt.Printf("Error: %v\n", err)
 				return
 			}
 

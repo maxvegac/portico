@@ -199,6 +199,19 @@ func NewAddonsInstanceDeleteCmd() *cobra.Command {
 				return
 			}
 
+			for name, other := range addonConfig.Instances {
+				if other.Target == instanceName {
+					fmt.Printf("Warning: admin tool %s manages %s and will stop working (delete it with: portico addons %s delete)\n", name, instanceName, name)
+				}
+			}
+
+			if force, _ := cmd.Flags().GetBool("force"); !force {
+				if !confirm(fmt.Sprintf("This will permanently delete addon instance %s and ALL its data. Continue?", instanceName)) {
+					fmt.Println("Cancelled.")
+					return
+				}
+			}
+
 			instanceDir := filepath.Join(cfg.AddonsDir, "instances", instanceName)
 
 			// Stop and remove containers first
@@ -220,6 +233,11 @@ func NewAddonsInstanceDeleteCmd() *cobra.Command {
 				return
 			}
 
+			// Unpublish admin tools from the reverse proxy
+			if err := unpublishTool(cfg, instanceName); err != nil {
+				fmt.Printf("Warning: could not remove the proxy config: %v\n", err)
+			}
+
 			// Remove instance directory
 			if err := os.RemoveAll(instanceDir); err != nil {
 				fmt.Printf("Warning: could not remove instance directory: %v\n", err)
@@ -229,5 +247,6 @@ func NewAddonsInstanceDeleteCmd() *cobra.Command {
 		},
 	}
 
+	cmd.Flags().BoolP("force", "f", false, "Do not ask for confirmation")
 	return cmd
 }

@@ -17,10 +17,11 @@ import (
 // NewSecretsEditCmd edits a secret file for a service in an app
 func NewSecretsEditCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "edit [secret-name] [value]",
-		Short: "Edit a secret",
-		Long:  "Edit a secret file for a service in the given app.\n\nExamples:\n  portico secrets my-app edit database_password newpassword123\n    Updates database_password secret (uses default service if only one exists)\n\n  portico secrets my-app api edit api_key sk-newkey123\n    Updates api_key secret for service 'api'",
-		Args:  cobra.ExactArgs(2),
+		Use:                "edit [secret-name] [value]",
+		Short:              "Edit a secret",
+		Long:               "Edit a secret file for a service in the given app.\n\nExamples:\n  portico secrets my-app edit database_password newpassword123\n    Updates database_password secret (uses default service if only one exists)\n\n  portico secrets my-app api edit api_key sk-newkey123\n    Updates api_key secret for service 'api'",
+		Args:               cobra.ExactArgs(2),
+		DisableFlagParsing: true, // values may start with '-'
 		Run: func(cmd *cobra.Command, args []string) {
 			// Get app-name from parent command (secrets)
 			appName, err := getAppNameFromSecretsArgs(cmd)
@@ -34,6 +35,10 @@ func NewSecretsEditCmd() *cobra.Command {
 			serviceName, _ := getServiceNameFromSecretsArgs(cmd)
 
 			secretName := strings.TrimSpace(args[0])
+			if err := util.ValidateSecretName(secretName); err != nil {
+				fmt.Printf("Error: %v\n", err)
+				return
+			}
 			value := strings.TrimSpace(args[1])
 
 			if secretName == "" {
@@ -119,46 +124,14 @@ func NewSecretsEditCmd() *cobra.Command {
 			// Fix file ownership if running as root
 			_ = util.FixFileOwnership(secretPath)
 
-			if err := am.SaveApp(a); err != nil {
-				fmt.Printf("Error saving app: %v\n", err)
+			// Save (regenerates docker-compose.yml), redeploy and refresh the proxy
+			if err := applyApp(cfg, am, a); err != nil {
+				fmt.Printf("Error: %v\n", err)
 				return
 			}
 
 			// Regenerate docker-compose and redeploy
 			dm := docker.NewManager(cfg.Registry.URL)
-
-			var dockerServices []docker.Service
-			for _, s := range a.Services {
-				replicas := s.Replicas
-				if replicas == 0 {
-					replicas = 1 // Default to 1 if not specified
-				}
-				dockerServices = append(dockerServices, docker.Service{
-					Name:        s.Name,
-					Image:       s.Image,
-					Port:        s.Port,
-					ExtraPorts:  s.ExtraPorts,
-					Environment: s.Environment,
-					Volumes:     s.Volumes,
-					Secrets:     s.Secrets,
-					DependsOn:   s.DependsOn,
-					Replicas:    replicas,
-				})
-			}
-
-			metadata := &docker.PorticoMetadata{
-				Domain: a.Domain,
-				Port:   a.Port,
-			}
-
-			if err := dm.GenerateDockerCompose(appDir, dockerServices, metadata); err != nil {
-				fmt.Printf("Error generating docker compose: %v\n", err)
-				return
-			}
-			if err := dm.DeployApp(appDir, dockerServices); err != nil {
-				fmt.Printf("Error deploying app: %v\n", err)
-				return
-			}
 
 			// Restart the service to apply updated secret
 			if err := dm.RestartService(appDir, serviceName); err != nil {

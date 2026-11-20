@@ -9,6 +9,9 @@ import (
 	"github.com/maxvegac/portico/src/cmd/portico/commands"
 )
 
+// version is set at build time: go build -ldflags "-X main.version=v1.2.3"
+var version = "dev"
+
 var rootCmd = &cobra.Command{
 	Use:   "portico",
 	Short: "Portico - PaaS platform for managing applications",
@@ -16,8 +19,13 @@ var rootCmd = &cobra.Command{
 }
 
 func main() {
-	// Check for auto-updates before running any command
-	commands.CheckAutoUpdate()
+	commands.Version = version
+
+	// Check for auto-updates before running any command (never inside git hooks:
+	// it would add network latency and noise to every push)
+	if len(os.Args) < 2 || (os.Args[1] != "git-receive" && os.Args[1] != "ssh-command") {
+		commands.CheckAutoUpdate()
+	}
 
 	// Create commands
 	versionCmd := commands.NewVersionCmd()
@@ -42,6 +50,8 @@ func main() {
 	cdCmd.Use = "cd [app-name]"
 	preserveCmd := commands.NewAppsPreserveCmd()
 	preserveCmd.Use = "preserve [app-name]"
+	deployCmd := commands.NewAppsDeployCmd()
+	deployCmd.Use = "deploy [app-name]"
 	execCmd := commands.NewAppsExecCmd()
 	execCmd.Use = "exec [app-name] [[service] [command...]]"
 	shellCmd := commands.NewAppsShellCmd()
@@ -101,6 +111,7 @@ func main() {
 
 	// App commands
 	rootCmd.AddCommand(createCmd)
+	rootCmd.AddCommand(deployCmd)
 	rootCmd.AddCommand(listCmd)
 	rootCmd.AddCommand(resetCmd)
 	rootCmd.AddCommand(destroyCmd)
@@ -119,15 +130,14 @@ func main() {
 	rootCmd.AddCommand(storageCmd)
 
 	// Addons commands
-	addonsCmd := commands.NewAddonsCmd()
-	addonsCmd.AddCommand(commands.NewAddonCreateCmd())
-	rootCmd.AddCommand(addonsCmd)
+	rootCmd.AddCommand(commands.NewAddonsCmd())
 
 	// Service commands
 	rootCmd.AddCommand(commands.NewServiceCmd())
 
 	// SSH commands (for managing git deployment keys)
 	rootCmd.AddCommand(commands.NewSSHCmd())
+	rootCmd.AddCommand(commands.NewSSHCommandCmd())
 
 	// Init command (for extracting embedded static files)
 	rootCmd.AddCommand(commands.NewInitCmd())

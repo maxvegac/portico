@@ -10,8 +10,6 @@ import (
 
 	"github.com/maxvegac/portico/src/internal/app"
 	"github.com/maxvegac/portico/src/internal/config"
-	"github.com/maxvegac/portico/src/internal/docker"
-	"github.com/maxvegac/portico/src/internal/proxy"
 	"github.com/maxvegac/portico/src/internal/util"
 )
 
@@ -47,171 +45,83 @@ Examples:
 		Args: cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
 			appName := args[0]
-			fmt.Printf("Creating application: %s\n", appName)
+			if err := util.ValidateNewAppName(appName); err != nil {
+				fmt.Printf("Error: %v\n", err)
+				return
+			}
+			if withService != "" {
+				if err := util.ValidateServiceName(withService); err != nil {
+					fmt.Printf("Error: %v\n", err)
+					return
+				}
+				if image == "" {
+					fmt.Printf("Error: --image is required when using --with-service\n")
+					return
+				}
+			}
 
-			// Load config
-			config, err := config.LoadConfig()
+			cfg, err := config.LoadConfig()
 			if err != nil {
 				fmt.Printf("Error loading config: %v\n", err)
 				return
 			}
 
-			// Create app manager
-			appManager := app.NewManager(config.AppsDir, config.TemplatesDir)
-
-			// Create app directories and secrets
-			if err := appManager.CreateAppDirectories(appName); err != nil {
-				fmt.Printf("Error creating app directories: %v\n", err)
+			appManager := app.NewManager(cfg.AppsDir, cfg.TemplatesDir)
+			if appManager.Exists(appName) {
+				fmt.Printf("Error: application %s already exists\n", appName)
 				return
 			}
 
-			// Create git repository for the app
-			porticoHome := filepath.Dir(config.AppsDir)
-			reposDir := filepath.Join(porticoHome, "repos")
+			fmt.Printf("Creating application: %s\n", appName)
 
-			if err := os.MkdirAll(reposDir, 0o755); err == nil {
-				repoDir := filepath.Join(reposDir, appName+".git")
-
-				// Create bare repository
-				gitCmd := exec.Command("git", "init", "--bare", repoDir)
-				if err := gitCmd.Run(); err == nil {
-					// Create post-receive hook that calls portico git-receive
-					postReceiveDst := filepath.Join(repoDir, "hooks", "post-receive")
-					hookContent := "#!/bin/sh\nexec portico git-receive\n"
-
-					if err := os.WriteFile(postReceiveDst, []byte(hookContent), 0o755); err == nil {
-						hostname, _ := os.Hostname()
-						if hostname == "" {
-							hostname = "portico-server"
-						}
-						fmt.Printf("Git repository created: portico@%s:%s.git\n", hostname, appName)
-					}
-				}
+			// Internal port Caddy proxies to (0 = background worker, no HTTP)
+			httpPort := app.DefaultHTTPPort
+			if servicePort > 0 {
+				httpPort = servicePort
 			}
-
-			appDir := filepath.Join(config.AppsDir, appName)
-
-			// Create basic app config (always, even without services)
-			appHTTPPort := 8080
 			if noHTTPPort {
-				appHTTPPort = 0
+				httpPort = 0
 			}
 
-			// Generate default domain: appname.IP.sslip.io
-			// sslip.io will resolve this based on the server's IP
-			serverIP, err := util.GetServerIPWithFallback(config.ExternalIP)
+			appConfig, err := createAppSkeleton(cfg, appManager, appName, httpPort)
 			if err != nil {
-				fmt.Printf("Error: failed to detect server IP for domain generation: %v\n", err)
-				fmt.Println("Please set a domain manually using: portico domains <app-name> add <domain>")
-				fmt.Println("Or set external IP using: portico set external-ip <ip-address>")
-				return
-			}
-			defaultDomain := util.AppNameToSSlipIO(appName, serverIP)
-
-			appConfig := &app.App{
-				Name:     appName,
-				Domain:   defaultDomain,
-				Port:     appHTTPPort,
-				Services: []app.Service{},
-			}
-
-			// Generate docker-compose.yml with basic structure (even without services)
-			dockerManager := docker.NewManager(config.Registry.URL)
-			dockerServices := []docker.Service{}
-
-			metadata := &docker.PorticoMetadata{
-				Domain: appConfig.Domain,
-				Port:   appConfig.Port,
-			}
-
-			if err := dockerManager.GenerateDockerCompose(appDir, dockerServices, metadata); err != nil {
-				fmt.Printf("Error generating docker compose: %v\n", err)
+				fmt.Printf("Error: %v\n", err)
 				return
 			}
 
-			// If --with-service flag is provided, create the service
+			// Create git repository for the app (push-to-deploy)
+			if err := createGitRepo(cfg.PorticoHome, appName); err != nil {
+				fmt.Printf("Warning: could not create git repository: %v\n", err)
+			} else {
+				hostname, _ := os.Hostname()
+				if hostname == "" {
+					hostname = "portico-server"
+				}
+				fmt.Printf("Git repository created: portico@%s:%s.git\n", hostname, appName)
+			}
+
+			// If --with-service flag is provided, create the service and deploy it
 			if withService != "" {
-				if image == "" {
-					fmt.Printf("Error: --image is required when using --with-service\n")
+				appConfig.Services = []app.Service{{
+					Name:        withService,
+					Image:       image,
+					Port:        httpPort,
+					Environment: map[string]string{},
+				}}
+				if httpPort > 0 {
+					appConfig.HttpService = withService
+				}
+
+				pullImage(image)
+				if err := applyApp(cfg, appManager, appConfig); err != nil {
+					fmt.Printf("Error: %v\n", err)
 					return
-				}
-
-				// Determine service port
-				svcPort := 3000
-				if noHTTPPort {
-					svcPort = 0
-					appHTTPPort = 0
-				} else if servicePort > 0 {
-					svcPort = servicePort
-				}
-
-				// Update app config with service
-				appConfig.Port = appHTTPPort
-				appConfig.Services = []app.Service{
-					{
-						Name:  withService,
-						Image: image,
-						Port:  svcPort,
-					},
-				}
-
-				// Save app configuration
-				if err := appManager.SaveApp(appConfig); err != nil {
-					fmt.Printf("Error saving app: %v\n", err)
-					return
-				}
-
-				// Generate docker-compose.yml with service
-				dockerServices = []docker.Service{
-					{
-						Name:        withService,
-						Image:       image,
-						Port:        svcPort,
-						Environment: make(map[string]string),
-						Volumes:     []string{},
-						Secrets:     []string{},
-						DependsOn:   []string{},
-						Replicas:    1,
-					},
-				}
-
-				metadata = &docker.PorticoMetadata{
-					Domain: appConfig.Domain,
-					Port:   appConfig.Port,
-				}
-
-				if err := dockerManager.GenerateDockerCompose(appDir, dockerServices, metadata); err != nil {
-					fmt.Printf("Error generating docker compose: %v\n", err)
-					return
-				}
-
-				// Pull the image (if it's from a registry)
-				fmt.Printf("Pulling image: %s\n", image)
-				pullCmd := exec.Command("docker", "pull", image)
-				if err := pullCmd.Run(); err != nil {
-					fmt.Printf("Warning: could not pull image (may be local): %v\n", err)
-				}
-
-				// Deploy the application
-				if err := dockerManager.DeployApp(appDir, dockerServices); err != nil {
-					fmt.Printf("Error deploying app: %v\n", err)
-					return
-				}
-
-				// Update Caddyfile only if there's an HTTP port
-				if appHTTPPort > 0 {
-					if err := appManager.CreateDefaultCaddyfile(appName); err != nil {
-						fmt.Printf("Warning: could not create Caddyfile: %v\n", err)
-					}
-
-					proxyManager := proxy.NewCaddyManager(config.ProxyDir, config.TemplatesDir)
-					if err := proxyManager.UpdateCaddyfile(config.AppsDir); err != nil {
-						fmt.Printf("Error updating Caddyfile: %v\n", err)
-						return
-					}
 				}
 
 				fmt.Printf("✅ Application %s created successfully with service %s!\n", appName, withService)
+				if url := appURL(appConfig); url != "" {
+					fmt.Printf("URL: %s\n", url)
+				}
 				return
 			}
 
@@ -219,9 +129,9 @@ Examples:
 			fmt.Println()
 			fmt.Println("Next steps:")
 			fmt.Printf("  To create a web service:\n")
-			fmt.Printf("    portico service %s web image [your-image]\n", appName)
+			fmt.Printf("    portico service %s web image [your-image] --port [container-port]\n", appName)
 			fmt.Println()
-			fmt.Printf("  To deploy from source code:\n")
+			fmt.Printf("  To deploy from source code (in a directory with a Dockerfile):\n")
 			fmt.Printf("    portico deploy %s\n", appName)
 			fmt.Println()
 			fmt.Printf("  To create a background worker:\n")
@@ -232,7 +142,39 @@ Examples:
 	cmd.Flags().StringVar(&withService, "with-service", "", "Create a service immediately (requires --image)")
 	cmd.Flags().StringVar(&image, "image", "", "Docker image for the service (required with --with-service)")
 	cmd.Flags().BoolVar(&noHTTPPort, "no-http-port", false, "Create a background worker without HTTP port")
-	cmd.Flags().IntVar(&servicePort, "port", 0, "Internal port for the service (default: 3000 for web services)")
+	cmd.Flags().IntVar(&servicePort, "port", 0, "Internal container port Caddy proxies to (default: 8080)")
 
 	return cmd
+}
+
+// createGitRepo creates the bare repository used for git push deployments
+func createGitRepo(porticoHome, appName string) error {
+	reposDir := filepath.Join(porticoHome, "repos")
+	if err := os.MkdirAll(reposDir, 0o755); err != nil {
+		return err
+	}
+
+	repoDir := filepath.Join(reposDir, appName+".git")
+	if _, err := os.Stat(repoDir); err == nil {
+		return nil // already exists
+	}
+
+	if output, err := exec.Command("git", "init", "--bare", repoDir).CombinedOutput(); err != nil {
+		return fmt.Errorf("git init failed: %v: %s", err, string(output))
+	}
+
+	// post-receive hook that calls portico git-receive.
+	// Use the absolute path of this binary so the hook works even with a minimal PATH.
+	porticoBin := "portico"
+	if exe, err := os.Executable(); err == nil {
+		porticoBin = exe
+	}
+	hookPath := filepath.Join(repoDir, "hooks", "post-receive")
+	hookContent := fmt.Sprintf("#!/bin/sh\nexec %q git-receive\n", porticoBin)
+	if err := os.WriteFile(hookPath, []byte(hookContent), 0o755); err != nil {
+		return err
+	}
+
+	_ = util.FixDirOwnership(repoDir)
+	return nil
 }

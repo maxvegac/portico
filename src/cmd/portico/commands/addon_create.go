@@ -11,6 +11,7 @@ import (
 
 	"github.com/maxvegac/portico/src/internal/addon"
 	"github.com/maxvegac/portico/src/internal/config"
+	"github.com/maxvegac/portico/src/internal/util"
 )
 
 // NewAddonCreateCmd creates a new addon instance
@@ -20,18 +21,35 @@ func NewAddonCreateCmd() *cobra.Command {
 	var mode string
 	var appName string
 	var instanceName string
+	var target string
+	var domain string
 
 	cmd := &cobra.Command{
 		Use:   "create [instance-name]",
 		Short: "Create a new addon instance",
-		Long:  "Create a new addon instance (database, cache, etc.).\n\nExamples:\n  portico addon create my-postgres --type postgresql --version 16 --shared\n  portico addon create my-app-db --type postgresql --version 15 --dedicated --app my-app",
-		Args:  cobra.ExactArgs(1),
+		Long: `Create a new addon instance (database, cache or admin tool).
+
+Admin tools (adminer, mongo-express) listen on 127.0.0.1 only, reachable through an
+SSH tunnel. With --domain they are also published by Caddy behind HTTP basic auth.
+
+Examples:
+  portico addons create my-postgres --type postgresql --version 18
+  portico addons create my-app-db --type postgresql --mode dedicated --app my-app
+  portico addons create dbadmin --type adminer
+  portico addons create dbadmin --type adminer --target my-postgres --domain db.example.com
+  portico addons create mongoadmin --type mongo-express --target my-mongo`,
+		Args: cobra.ExactArgs(1),
 		Run: func(_ *cobra.Command, args []string) {
 			instanceName = args[0]
+			// Instance names become directories, compose projects and DNS aliases
+			if err := util.ValidateAppName(instanceName); err != nil {
+				fmt.Printf("Error: invalid instance name: %v\n", err)
+				return
+			}
 
 			if addonType == "" {
 				fmt.Println("Error: --type is required")
-				fmt.Println("Available types: postgresql, mariadb, mysql, mongodb, redis, valkey")
+				fmt.Printf("Available types: %s\n", strings.Join(addonTypeNames, ", "))
 				return
 			}
 
@@ -58,6 +76,9 @@ func NewAddonCreateCmd() *cobra.Command {
 			}
 
 			// Get version config
+			if version == "" {
+				version = def.LatestVersion()
+			}
 			versionConfig, err := def.GetVersionConfig(version)
 			if err != nil {
 				fmt.Printf("Error: %v\n", err)
@@ -78,18 +99,66 @@ func NewAddonCreateCmd() *cobra.Command {
 				return
 			}
 
-			// Determine port (find available port)
+			isTool := def.Type == "tool"
+			if !isTool && (target != "" || domain != "") {
+				fmt.Println("Error: --target and --domain only apply to admin tools (adminer, mongo-express)")
+				return
+			}
+			if isTool && mode == "dedicated" {
+				fmt.Println("Error: admin tools can't be dedicated to an app")
+				return
+			}
+			if def.ServiceMode == "inline" {
+				fmt.Printf("Error: %s is added to an app: portico addons <app> add %s\n", addonType, addonType)
+				return
+			}
+
+			// Determine host port (find one not used by another instance)
 			port := def.DefaultPort
 			portInUse := make(map[int]bool)
 			for _, inst := range config.Instances {
-				if inst.Type == addonType {
-					portInUse[inst.Port] = true
-				}
+				portInUse[inst.Port] = true
 			}
 
 			// Find next available port
 			for portInUse[port] {
 				port++
+			}
+
+			if isTool {
+				instance := addon.Instance{
+					Name:    instanceName,
+					Type:    addonType,
+					Version: version,
+					Mode:    "shared",
+					Port:    port,
+					Domain:  strings.ToLower(domain),
+					Target:  target,
+				}
+				instanceDir := filepath.Join(cfg.AddonsDir, "instances", instanceName)
+				password, err := createToolInstance(cfg, am, config.Instances, &instance, versionConfig)
+				if err != nil {
+					_ = os.RemoveAll(instanceDir)
+					fmt.Printf("Error: %v\n", err)
+					return
+				}
+				config.Instances[instanceName] = instance
+				if err := am.SaveConfig(config); err != nil {
+					_ = os.RemoveAll(instanceDir)
+					fmt.Printf("Error saving config: %v\n", err)
+					return
+				}
+				_ = util.FixDirOwnership(instanceDir)
+				_ = util.FixFileOwnership(am.ConfigFile)
+				if instance.Domain != "" {
+					if err := publishTool(cfg, instance, versionConfig.Ports[0].Internal, password); err != nil {
+						fmt.Printf("Error publishing %s: %v\n", instance.Domain, err)
+						return
+					}
+				}
+				fmt.Printf("Admin tool %s (%s %s) created successfully!\n", instanceName, addonType, version)
+				printToolAccess(instance, password)
+				return
 			}
 
 			// Create instance directory
@@ -110,7 +179,11 @@ func NewAddonCreateCmd() *cobra.Command {
 			// Generate secrets
 			for _, secretName := range versionConfig.Secrets {
 				secretPath := filepath.Join(secretsDir, secretName)
-				defaultValue := generateSecret(secretName)
+				defaultValue, err := generateSecret(secretName)
+				if err != nil {
+					fmt.Printf("Error: %v\n", err)
+					return
+				}
 				if err := os.WriteFile(secretPath, []byte(defaultValue), 0o600); err != nil {
 					fmt.Printf("Error creating secret %s: %v\n", secretName, err)
 					return
@@ -147,6 +220,9 @@ func NewAddonCreateCmd() *cobra.Command {
 				return
 			}
 
+			_ = util.FixDirOwnership(instanceDir)
+			_ = util.FixFileOwnership(am.ConfigFile)
+
 			fmt.Printf("Addon instance %s created successfully!\n", instanceName)
 			fmt.Printf("Type: %s, Version: %s, Mode: %s, Port: %d\n", addonType, version, mode, port)
 			if mode == "dedicated" {
@@ -155,10 +231,12 @@ func NewAddonCreateCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&addonType, "type", "", "Addon type (postgresql, mariadb, mysql, mongodb, redis, valkey)")
+	cmd.Flags().StringVar(&addonType, "type", "", "Addon type ("+strings.Join(addonTypeNames, ", ")+")")
 	cmd.Flags().StringVar(&version, "version", "", "Version (if not specified, uses default)")
 	cmd.Flags().StringVar(&mode, "mode", "shared", "Mode: shared or dedicated")
 	cmd.Flags().StringVar(&appName, "app", "", "App name (required for dedicated mode)")
+	cmd.Flags().StringVar(&target, "target", "", "Admin tools: database instance to manage (required for mongo-express)")
+	cmd.Flags().StringVar(&domain, "domain", "", "Admin tools: publish on this domain with HTTPS and basic auth")
 	return cmd
 }
 
@@ -170,7 +248,13 @@ func generateAddonCompose(instanceDir string, inst addon.Instance, def *addon.De
 	serviceName := inst.Type
 	serviceMap := make(map[string]interface{})
 	serviceMap["image"] = versionConfig.Image
-	serviceMap["networks"] = []string{"portico-network"}
+	serviceMap["restart"] = "unless-stopped"
+	// Apps reach the instance over portico-network by its namespaced alias
+	serviceMap["networks"] = map[string]interface{}{
+		"portico-network": map[string]interface{}{
+			"aliases": []string{util.AddonPrefix + inst.Name},
+		},
+	}
 
 	// Environment variables
 	env := []string{}
@@ -191,19 +275,22 @@ func generateAddonCompose(instanceDir string, inst addon.Instance, def *addon.De
 	// Secrets
 	serviceMap["secrets"] = versionConfig.Secrets
 
-	// Ports
+	// Ports: published on localhost only (for admin tools / SSH tunnels).
+	// The main port uses the instance's allocated host port so several instances
+	// of the same type don't collide.
 	ports := []string{}
-	for _, portConfig := range versionConfig.Ports {
-		externalPort := portConfig.External
-		if externalPort == 0 {
-			externalPort = inst.Port
+	for i, portConfig := range versionConfig.Ports {
+		hostPort := portConfig.External
+		if i == 0 || hostPort == 0 {
+			hostPort = inst.Port
 		}
-		ports = append(ports, fmt.Sprintf("%d:%d", externalPort, portConfig.Internal))
+		ports = append(ports, fmt.Sprintf("127.0.0.1:%d:%d", hostPort, portConfig.Internal))
 	}
 	serviceMap["ports"] = ports
 
 	// Build compose structure
 	compose := map[string]interface{}{
+		"name": util.AddonPrefix + inst.Name, // never collides with an app's compose project
 		"services": map[string]interface{}{
 			serviceName: serviceMap,
 		},
@@ -230,5 +317,5 @@ func generateAddonCompose(instanceDir string, inst addon.Instance, def *addon.De
 		return fmt.Errorf("error marshaling compose: %w", err)
 	}
 
-	return os.WriteFile(composeFile, data, 0o644)
+	return util.WriteFileAtomic(composeFile, data, 0o644)
 }

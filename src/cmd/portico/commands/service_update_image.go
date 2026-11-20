@@ -2,16 +2,12 @@ package commands
 
 import (
 	"fmt"
-	"os"
-	"os/exec"
-	"path/filepath"
 
 	"github.com/spf13/cobra"
 
 	"github.com/maxvegac/portico/src/internal/app"
 	"github.com/maxvegac/portico/src/internal/config"
-	"github.com/maxvegac/portico/src/internal/docker"
-	"github.com/maxvegac/portico/src/internal/proxy"
+	"github.com/maxvegac/portico/src/internal/util"
 )
 
 // NewServiceUpdateImageCmd updates the Docker image for a service
@@ -59,6 +55,11 @@ Examples:
 				return
 			}
 
+			if err := util.ValidateServiceName(serviceName); err != nil {
+				fmt.Printf("Error: %v\n", err)
+				return
+			}
+
 			cfg, err := config.LoadConfig()
 			if err != nil {
 				fmt.Printf("Error loading config: %v\n", err)
@@ -66,165 +67,59 @@ Examples:
 			}
 
 			appManager := app.NewManager(cfg.AppsDir, cfg.TemplatesDir)
-			appConfig, err := appManager.LoadApp(appName)
-			serviceExists := false
+			appConfig, err := loadOrCreateApp(cfg, appManager, appName)
 			if err != nil {
-				// App doesn't exist or has no docker-compose.yml
-				// Create app directories if needed
-				appDir := filepath.Join(cfg.AppsDir, appName)
-				if _, err := os.Stat(appDir); os.IsNotExist(err) {
-					if err := appManager.CreateAppDirectories(appName); err != nil {
-						fmt.Printf("Error creating app directories: %v\n", err)
-						return
-					}
-				}
+				fmt.Printf("Error: %v\n", err)
+				return
+			}
 
-				// Create new app config with the service
-				servicePort := 3000
-				appHTTPPort := 8080
-				if noHTTPPort {
-					servicePort = 0
-					appHTTPPort = 0
-				} else if port > 0 {
-					servicePort = port
-				}
-
-				appConfig = &app.App{
-					Name:   appName,
-					Domain: fmt.Sprintf("%s.sslip.io", appName),
-					Port:   appHTTPPort,
-					Services: []app.Service{
-						{
-							Name:  serviceName,
-							Image: imageName,
-							Port:  servicePort,
-						},
-					},
-				}
+			isFirstService := len(appConfig.Services) == 0
+			_, created := setServiceImage(appConfig, serviceName, imageName)
+			if created {
 				fmt.Printf("Creating service %s in app %s...\n", serviceName, appName)
 			} else {
-				// Find and update the service
-				found := false
-				for i := range appConfig.Services {
-					if appConfig.Services[i].Name == serviceName {
-						appConfig.Services[i].Image = imageName
-						found = true
-						serviceExists = true
-						break
-					}
-				}
-
-				if !found {
-					// Service doesn't exist, create it
-					var servicePort int
-					if noHTTPPort {
-						servicePort = 0
-					} else if port > 0 {
-						servicePort = port
-					} else if len(appConfig.Services) == 0 || serviceName == "web" {
-						// First service or "web" service gets HTTP port by default
-						if appConfig.Port == 0 {
-							appConfig.Port = 8080
-						}
-						servicePort = 3000
-					} else {
-						// Additional service, assume background worker
-						servicePort = 0
-					}
-
-					newService := app.Service{
-						Name:  serviceName,
-						Image: imageName,
-						Port:  servicePort,
-					}
-
-					appConfig.Services = append(appConfig.Services, newService)
-					fmt.Printf("Creating service %s in app %s...\n", serviceName, appName)
-				} else {
-					fmt.Printf("Updating service %s in app %s...\n", serviceName, appName)
-				}
+				fmt.Printf("Updating service %s in app %s...\n", serviceName, appName)
 			}
 
-			// Save app configuration
-			if err := appManager.SaveApp(appConfig); err != nil {
-				fmt.Printf("Error saving app: %v\n", err)
+			// HTTP configuration
+			switch {
+			case noHTTPPort:
+				// Worker: if it was the HTTP service, disable HTTP for the app
+				if appConfig.HTTPServiceName() == serviceName {
+					appConfig.Port = 0
+					appConfig.HttpService = ""
+				}
+			case port > 0:
+				// Explicit port: this service receives HTTP traffic on that port
+				appConfig.Port = port
+				appConfig.HttpService = serviceName
+			case created && (isFirstService || serviceName == "web"):
+				// First (or "web") service: receives HTTP traffic
+				if appConfig.Port == 0 {
+					appConfig.Port = app.DefaultHTTPPort
+				}
+				appConfig.HttpService = serviceName
+			}
+
+			pullImage(imageName)
+
+			if err := applyApp(cfg, appManager, appConfig); err != nil {
+				fmt.Printf("Error: %v\n", err)
 				return
 			}
 
-			// Generate docker-compose.yml
-			dockerManager := docker.NewManager(cfg.Registry.URL)
-			appDir := filepath.Join(cfg.AppsDir, appName)
-
-			var dockerServices []docker.Service
-			for _, svc := range appConfig.Services {
-				replicas := svc.Replicas
-				if replicas == 0 {
-					replicas = 1 // Default to 1 if not specified
-				}
-				dockerServices = append(dockerServices, docker.Service{
-					Name:        svc.Name,
-					Image:       svc.Image,
-					Port:        svc.Port,
-					ExtraPorts:  svc.ExtraPorts,
-					Environment: svc.Environment,
-					Volumes:     svc.Volumes,
-					Secrets:     svc.Secrets,
-					DependsOn:   svc.DependsOn,
-					Replicas:    replicas,
-				})
-			}
-
-			metadata := &docker.PorticoMetadata{
-				Domain: appConfig.Domain,
-				Port:   appConfig.Port,
-			}
-
-			if err := dockerManager.GenerateDockerCompose(appDir, dockerServices, metadata); err != nil {
-				fmt.Printf("Error generating docker compose: %v\n", err)
-				return
-			}
-
-			// Pull the new image (if it's from a registry)
-			fmt.Printf("Pulling image: %s\n", imageName)
-			pullCmd := exec.Command("docker", "pull", imageName)
-			if err := pullCmd.Run(); err != nil {
-				fmt.Printf("Warning: could not pull image (may be local): %v\n", err)
-			}
-
-			// Deploy the application
-			if err := dockerManager.DeployApp(appDir, dockerServices); err != nil {
-				fmt.Printf("Error deploying app: %v\n", err)
-				return
-			}
-
-			// Update Caddyfile only if there's an HTTP port
-			if appConfig.Port > 0 {
-				// Create Caddyfile if it doesn't exist
-				appDir := filepath.Join(cfg.AppsDir, appName)
-				caddyfilePath := filepath.Join(appDir, "Caddyfile")
-				if _, err := os.Stat(caddyfilePath); os.IsNotExist(err) {
-					if err := appManager.CreateDefaultCaddyfile(appName); err != nil {
-						fmt.Printf("Warning: could not create Caddyfile: %v\n", err)
-					}
-				}
-
-				// Update proxy Caddyfile
-				proxyManager := proxy.NewCaddyManager(cfg.ProxyDir, cfg.TemplatesDir)
-				if err := proxyManager.UpdateCaddyfile(cfg.AppsDir); err != nil {
-					fmt.Printf("Error updating Caddyfile: %v\n", err)
-					return
-				}
-			}
-
-			if serviceExists {
-				fmt.Printf("✅ Service %s in app %s updated to image %s\n", serviceName, appName, imageName)
-			} else {
+			if created {
 				fmt.Printf("✅ Service %s created in app %s with image %s\n", serviceName, appName, imageName)
+			} else {
+				fmt.Printf("✅ Service %s in app %s updated to image %s\n", serviceName, appName, imageName)
+			}
+			if appConfig.Port > 0 && appConfig.HTTPServiceName() == serviceName {
+				fmt.Printf("HTTP: %s -> %s:%d\n", appURL(appConfig), serviceName, appConfig.Port)
 			}
 		},
 	}
 
-	cmd.Flags().IntVar(&port, "port", 0, "Internal port for the service (default: 3000 for web services, 0 for workers)")
+	cmd.Flags().IntVar(&port, "port", 0, "Internal container port that receives HTTP traffic (makes this the app's HTTP service)")
 	cmd.Flags().BoolVar(&noHTTPPort, "no-http-port", false, "Create a background worker without HTTP port")
 
 	return cmd

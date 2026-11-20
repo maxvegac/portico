@@ -1,0 +1,11 @@
+name: mongo-express
+type: tool
+description: mongo-express web UI for a MongoDB instance
+default_port: 9180
+service_mode: shared
+
+versions:
+  "1":
+    image: mongo-express:1
+    ports:
+      - internal: 8081

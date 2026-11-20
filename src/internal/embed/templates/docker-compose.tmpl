@@ -6,23 +6,23 @@ name: {{.AppName}}
 services:
 {{range .Services}}
   {{.Name}}:
-    image: {{.Image}}
+    image: {{quote .Image}}
 {{- if .Ports}}
     ports:
 {{- range .Ports}}
-      - "{{.}}"
+      - {{quote .}}
 {{- end}}
 {{- end}}
 {{- if .Environment}}
     environment:
 {{- range $key, $value := .Environment}}
-      - {{$key}}={{$value}}
+      - {{quote (printf "%s=%s" $key $value)}}
 {{- end}}
 {{- end}}
     volumes:
 {{- if .Volumes}}
 {{- range .Volumes}}
-      - {{.}}
+      - {{quote .}}
 {{- end}}
 {{- end}}
       # Mount logs directory for application logs (if app writes to /app/logs or similar)
@@ -48,7 +48,9 @@ services:
         max-file: "3"
         tag: "{{$.AppName}}-{{.Name}}"
     networks:
-      - portico-network
+      portico-network:
+        aliases:
+          - {{$.AppName}}-{{.Name}}
 {{end}}
 
 networks:
@@ -71,8 +73,5 @@ x-portico:
   http_port: {{.XPortico.Port}}
 {{- else}}
   http_enabled: false
-{{- end}}
-{{- if .XPortico.Generated}}
-  generated_hash: {{.XPortico.Generated}}
 {{- end}}
 {{- end}}

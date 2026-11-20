@@ -1,11 +1,8 @@
 package commands
 
 import (
-	"bufio"
 	"fmt"
-	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -48,49 +45,20 @@ func NewAppsUpCmd() *cobra.Command {
 			} else if hasManualChanges {
 				fmt.Println("⚠️  Warning: docker-compose.yml appears to have been manually modified.")
 				fmt.Println("Portico will regenerate it, preserving your custom fields.")
-				fmt.Print("Continue? (y/N): ")
-				reader := bufio.NewReader(os.Stdin)
-				response, _ := reader.ReadString('\n')
-				response = strings.TrimSpace(response)
-				if !strings.EqualFold(response, "y") && !strings.EqualFold(response, "yes") {
+				fmt.Println("(Use 'portico preserve' to keep the file exactly as it is.)")
+				if !confirm("Continue?") {
 					fmt.Println("Cancelled.")
 					return
 				}
 			}
 
-			// Prepare services and metadata
-			var dockerServices []docker.Service
-			for _, service := range appConfig.Services {
-				replicas := service.Replicas
-				if replicas == 0 {
-					replicas = 1 // Default to 1 if not specified
-				}
-				dockerServices = append(dockerServices, docker.Service{
-					Name:        service.Name,
-					Image:       service.Image,
-					Port:        service.Port,
-					ExtraPorts:  service.ExtraPorts,
-					Environment: service.Environment,
-					Volumes:     service.Volumes,
-					Secrets:     service.Secrets,
-					DependsOn:   service.DependsOn,
-					Replicas:    replicas,
-				})
-			}
-
-			metadata := &docker.PorticoMetadata{
-				Domain: appConfig.Domain,
-				Port:   appConfig.Port,
-			}
-
-			if err := dm.GenerateDockerCompose(appDir, dockerServices, metadata); err != nil {
-				fmt.Printf("Error generating docker compose: %v\n", err)
+			if len(appConfig.Services) == 0 {
+				fmt.Printf("App %s has no services yet. Deploy one with 'portico deploy %s' or 'portico service %s web image <image>'\n", appName, appName, appName)
 				return
 			}
 
-			// Deploy
-			if err := dm.DeployApp(appDir, dockerServices); err != nil {
-				fmt.Printf("Error starting services: %v\n", err)
+			if err := applyApp(cfg, am, appConfig); err != nil {
+				fmt.Printf("Error: %v\n", err)
 				return
 			}
 

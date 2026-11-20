@@ -17,10 +17,11 @@ import (
 // NewSecretsAddCmd adds a secret file for a service in an app
 func NewSecretsAddCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "add [secret-name] [value]",
-		Short: "Add a secret",
-		Long:  "Add a secret file for a service in the given app.\n\nExamples:\n  portico secrets my-app add database_password mypassword123\n    Adds database_password secret (uses default service if only one exists)\n\n  portico secrets my-app api add api_key sk-abc123\n    Adds api_key secret for service 'api'",
-		Args:  cobra.ExactArgs(2),
+		Use:                "add [secret-name] [value]",
+		Short:              "Add a secret",
+		Long:               "Add a secret file for a service in the given app.\n\nExamples:\n  portico secrets my-app add database_password mypassword123\n    Adds database_password secret (uses default service if only one exists)\n\n  portico secrets my-app api add api_key sk-abc123\n    Adds api_key secret for service 'api'",
+		Args:               cobra.ExactArgs(2),
+		DisableFlagParsing: true, // values may start with '-'
 		Run: func(cmd *cobra.Command, args []string) {
 			// Get app-name from parent command (secrets)
 			appName, err := getAppNameFromSecretsArgs(cmd)
@@ -34,6 +35,10 @@ func NewSecretsAddCmd() *cobra.Command {
 			serviceName, _ := getServiceNameFromSecretsArgs(cmd)
 
 			secretName := strings.TrimSpace(args[0])
+			if err := util.ValidateSecretName(secretName); err != nil {
+				fmt.Printf("Error: %v\n", err)
+				return
+			}
 			value := strings.TrimSpace(args[1])
 
 			if secretName == "" {
@@ -101,8 +106,16 @@ func NewSecretsAddCmd() *cobra.Command {
 				return
 			}
 
-			// Create secret file
+			// Secret files are shared by all services of the app: don't silently
+			// change the value another service is using
 			secretPath := filepath.Join(envDir, secretName)
+			if existing, err := os.ReadFile(secretPath); err == nil && string(existing) != value {
+				fmt.Printf("Error: secret %s already exists in app %s with a different value (shared by its services).\n", secretName, appName)
+				fmt.Printf("Use 'portico secrets %s <service> edit %s <value>' to change it for all services.\n", appName, secretName)
+				return
+			}
+
+			// Create secret file
 			if err := os.WriteFile(secretPath, []byte(value), 0o600); err != nil {
 				fmt.Printf("Error creating secret file: %v\n", err)
 				return
@@ -117,46 +130,14 @@ func NewSecretsAddCmd() *cobra.Command {
 			}
 			a.Services[serviceIndex].Secrets = append(a.Services[serviceIndex].Secrets, secretName)
 
-			if err := am.SaveApp(a); err != nil {
-				fmt.Printf("Error saving app: %v\n", err)
+			// Save (regenerates docker-compose.yml), redeploy and refresh the proxy
+			if err := applyApp(cfg, am, a); err != nil {
+				fmt.Printf("Error: %v\n", err)
 				return
 			}
 
 			// Regenerate docker-compose and redeploy
 			dm := docker.NewManager(cfg.Registry.URL)
-
-			var dockerServices []docker.Service
-			for _, s := range a.Services {
-				replicas := s.Replicas
-				if replicas == 0 {
-					replicas = 1 // Default to 1 if not specified
-				}
-				dockerServices = append(dockerServices, docker.Service{
-					Name:        s.Name,
-					Image:       s.Image,
-					Port:        s.Port,
-					ExtraPorts:  s.ExtraPorts,
-					Environment: s.Environment,
-					Volumes:     s.Volumes,
-					Secrets:     s.Secrets,
-					DependsOn:   s.DependsOn,
-					Replicas:    replicas,
-				})
-			}
-
-			metadata := &docker.PorticoMetadata{
-				Domain: a.Domain,
-				Port:   a.Port,
-			}
-
-			if err := dm.GenerateDockerCompose(appDir, dockerServices, metadata); err != nil {
-				fmt.Printf("Error generating docker compose: %v\n", err)
-				return
-			}
-			if err := dm.DeployApp(appDir, dockerServices); err != nil {
-				fmt.Printf("Error deploying app: %v\n", err)
-				return
-			}
 
 			// Restart the service to apply new secret
 			if err := dm.RestartService(appDir, serviceName); err != nil {

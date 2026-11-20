@@ -154,8 +154,13 @@ fi
 
 # Create directories
 echo -e "${BLUE}📁 Creating directories...${NC}"
-sudo mkdir -p /home/portico/{apps,reverse-proxy,templates,www,logs/apps,addons/definitions,addons/instances,repos,bin,.tmp}
-sudo chown -R portico:portico /home/portico
+sudo mkdir -p /home/portico/{apps,reverse-proxy,reverse-proxy/addons,templates,www,logs/apps,addons/definitions,addons/instances,repos,bin,.tmp}
+# Not recursive: on re-install, database data directories (owned by the container
+# users, e.g. postgres uid 70) must keep their ownership or the databases won't start
+sudo chown portico:portico /home/portico
+for dir in apps reverse-proxy templates www logs logs/apps addons addons/definitions addons/instances repos bin .tmp; do
+    sudo chown portico:portico "/home/portico/$dir"
+done
 
 # Create symbolic link for Docker container logs
 echo -e "${BLUE}🔗 Creating symbolic link for Docker container logs...${NC}"
@@ -233,7 +238,11 @@ if [[ "$USER" != "root" ]]; then
         echo -e "${YELLOW}❓ Do you want to add user '$USER' to the 'portico' group?${NC}"
         echo -e "${YELLOW}   This will allow you to access Portico files without sudo.${NC}"
         echo -e "${YELLOW}   (y/N): ${NC}"
-        read -r response
+        # With `curl ... | bash` stdin is the script itself: read from the terminal
+        response=""
+        if [ -r /dev/tty ]; then
+            read -r response < /dev/tty || response=""
+        fi
         if [[ "$response" =~ ^[Yy]$ ]]; then
             echo -e "${BLUE}➕ Adding $USER to portico group...${NC}"
             sudo usermod -aG portico $USER
@@ -252,7 +261,10 @@ fi
 
 # Set group permissions on portico directories
 echo -e "${BLUE}🔐 Setting group permissions...${NC}"
-sudo chmod -R g+rwX /home/portico
+# Not recursive for the same reason (Postgres refuses data directories with group access)
+for dir in apps reverse-proxy templates www logs addons addons/definitions addons/instances repos .tmp; do
+    sudo chmod g+rwX "/home/portico/$dir"
+done
 sudo chmod g+s /home/portico/apps  # Set setgid bit so new files inherit group
 sudo chmod g+s /home/portico/reverse-proxy  # Set setgid bit so new files inherit group
 sudo chmod g+s /home/portico/addons  # Set setgid bit so new files inherit group
@@ -270,12 +282,17 @@ echo -e "${BLUE}🔧 Setting up Git Deployment...${NC}"
 
 # Setup SSH for portico user
 sudo -u portico mkdir -p /home/portico/.ssh
-sudo -u portico chmod 700 /home/portico/.ssh
 
 if [ ! -f /home/portico/.ssh/authorized_keys ]; then
     sudo -u portico touch /home/portico/.ssh/authorized_keys
-    sudo -u portico chmod 600 /home/portico/.ssh/authorized_keys
 fi
+
+# sshd (StrictModes) refuses key authentication if the home directory, ~/.ssh or
+# authorized_keys are group/world-writable, so undo the group write bit there
+sudo chmod g-w,o-w /home/portico
+sudo chmod 700 /home/portico/.ssh
+sudo chmod 600 /home/portico/.ssh/authorized_keys
+sudo chown -R portico:portico /home/portico/.ssh
 
 echo -e "${GREEN}✅ Git deployment configured${NC}"
 
@@ -413,7 +430,7 @@ if [[ "$BINARY_AVAILABLE" == "false" ]]; then
     cd portico
     
     echo -e "${BLUE}🔨 Building Portico...${NC}"
-    go build -o portico ./src/cmd/portico
+    go build -ldflags "-X main.version=$(git describe --tags --always 2>/dev/null || echo dev)" -o portico ./src/cmd/portico
     
     if [[ -f "portico" ]]; then
         sudo mv portico /usr/local/bin/portico
@@ -435,11 +452,12 @@ if sudo -u portico /usr/local/bin/portico init; then
     
     # Ensure all extracted files have correct ownership
     echo -e "${BLUE}🔐 Ensuring correct file ownership...${NC}"
-    sudo chown -R portico:portico /home/portico/{templates,www,reverse-proxy,addons,logs} 2>/dev/null || true
+    sudo chown -R portico:portico /home/portico/{templates,www,reverse-proxy,addons/definitions} 2>/dev/null || true
     
     # Fix permissions on extracted files
-    sudo chmod -R g+rwX /home/portico/{templates,www,reverse-proxy,addons,logs} 2>/dev/null || true
-    sudo chmod 644 /home/portico/config.yml 2>/dev/null || true
+    sudo chmod -R g+rwX /home/portico/{templates,www,reverse-proxy,addons/definitions} 2>/dev/null || true
+    # config.yml may hold registry credentials: readable by the portico group only
+    sudo chmod 640 /home/portico/config.yml 2>/dev/null || true
     sudo chmod 644 /home/portico/reverse-proxy/*.yml 2>/dev/null || true
     sudo chmod 644 /home/portico/reverse-proxy/Caddyfile 2>/dev/null || true
     
@@ -502,9 +520,9 @@ fi
 
 echo ""
 echo -e "${BLUE}📋 Next steps:${NC}"
-echo "   1. Visit http://YOUR-IP-ADDRESS to see the welcome page"
+echo "   1. Visit https://YOUR-IP-ADDRESS to see the welcome page (self-signed certificate)"
 echo "   2. Create your first app: portico create my-app"
-echo "   3. Deploy it: portico up my-app"
+echo "   3. Deploy an image: portico service my-app web image nginx:alpine --port 80"
 echo ""
 echo -e "${BLUE}🔧 Useful commands:${NC}"
 echo "   portico list              # List all applications"
@@ -514,8 +532,8 @@ echo "   portico down <name>       # Stop application"
 echo "   portico status <name>     # Show application status"
 echo ""
 echo -e "${BLUE}🚀 Git Deployment:${NC}"
-echo "   1. Add your SSH key: portico ssh add ~/.ssh/id_rsa.pub \"my-key\""
-echo "   2. Create app (creates git repo automatically): portico create my-app"
+echo "   1. Add your SSH key (git push only): portico ssh add ~/.ssh/id_ed25519.pub my-key"
+echo "   2. (Optional) Create the app first: portico create my-app"
 echo "   3. Push from your machine: git remote add portico portico@$(hostname):my-app.git"
 echo "   4. Deploy: git push portico main"
 echo ""
@@ -523,10 +541,11 @@ echo -e "${BLUE}📦 Addon commands:${NC}"
 echo "   portico addons list                    # List available addons"
 echo "   portico addons list postgresql         # List versions for an addon"
 echo "   portico addons instances                # List created instances"
-echo "   portico addons create <name> --type postgresql --version 16 --shared"
-echo "   portico addons database <instance> create <db-name>"
-echo "   portico addons link <app> <instance> --database <db-name>"
-echo "   portico addons add <app> redis --version 7"
+echo "   portico addons create <name> --type postgresql --version 18"
+echo "   portico addons <instance> up"
+echo "   portico addons <instance> database create <db-name>"
+echo "   portico addons <app> link <instance> --database <db-name>"
+echo "   portico addons <app> add redis --version 8"
 echo ""
 echo -e "${BLUE}📖 Check the logs:${NC}"
 echo "   docker compose -f /home/portico/reverse-proxy/docker-compose.yml logs -f"

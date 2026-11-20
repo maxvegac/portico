@@ -35,6 +35,10 @@ func NewStorageAddCmd() *cobra.Command {
 				fmt.Println("Invalid paths")
 				return
 			}
+			if strings.ContainsAny(hostPath+containerPath, ":\n") || !strings.HasPrefix(containerPath, "/") {
+				fmt.Println("Error: container path must be absolute and paths cannot contain ':'")
+				return
+			}
 
 			cfg, err := config.LoadConfig()
 			if err != nil {
@@ -93,47 +97,15 @@ func NewStorageAddCmd() *cobra.Command {
 				return
 			}
 
-			if err := am.SaveApp(a); err != nil {
-				fmt.Printf("Error saving app: %v\n", err)
+			// Save (regenerates docker-compose.yml), redeploy and refresh the proxy
+			if err := applyApp(cfg, am, a); err != nil {
+				fmt.Printf("Error: %v\n", err)
 				return
 			}
 
 			// Regenerate docker-compose and redeploy
 			dm := docker.NewManager(cfg.Registry.URL)
 			appDir := filepath.Join(cfg.AppsDir, appName)
-
-			var dockerServices []docker.Service
-			for _, s := range a.Services {
-				replicas := s.Replicas
-				if replicas == 0 {
-					replicas = 1 // Default to 1 if not specified
-				}
-				dockerServices = append(dockerServices, docker.Service{
-					Name:        s.Name,
-					Image:       s.Image,
-					Port:        s.Port,
-					ExtraPorts:  s.ExtraPorts,
-					Environment: s.Environment,
-					Volumes:     s.Volumes,
-					Secrets:     s.Secrets,
-					DependsOn:   s.DependsOn,
-					Replicas:    replicas,
-				})
-			}
-
-			metadata := &docker.PorticoMetadata{
-				Domain: a.Domain,
-				Port:   a.Port,
-			}
-
-			if err := dm.GenerateDockerCompose(appDir, dockerServices, metadata); err != nil {
-				fmt.Printf("Error generating docker compose: %v\n", err)
-				return
-			}
-			if err := dm.DeployApp(appDir, dockerServices); err != nil {
-				fmt.Printf("Error deploying app: %v\n", err)
-				return
-			}
 
 			// Restart the service to apply new volume mount
 			if err := dm.RestartService(appDir, serviceName); err != nil {

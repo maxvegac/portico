@@ -1,9 +1,9 @@
 package docker
 
 import (
-	"bufio"
 	"bytes"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -49,9 +49,25 @@ func (dm *Manager) DeployApp(appDir string, services []Service) error {
 		return fmt.Errorf("error ensuring portico-network exists: %w", err)
 	}
 
+	// Create the per-service logs directories ourselves: if Docker creates a
+	// missing bind mount source it is owned by root, and neither portico nor a
+	// non-root container user could write to it. (Best effort.)
+	for _, svc := range services {
+		logsDir := filepath.Join(logsMountPrefix, appName, svc.Name)
+		if err := os.MkdirAll(logsDir, 0o755); err == nil {
+			_ = util.FixDirOwnership(logsDir)
+		}
+	}
+
 	// Build docker compose command with explicit project name
 	// This ensures services are named consistently: appname-servicename
+	// --remove-orphans stops containers of services that were removed from the compose file.
+	// Skip it if an addon instance from an older version shares this compose project
+	// name: its database container would be treated as an orphan.
 	args := []string{"compose", "-f", composeFile, "-p", appName, "up", "-d"}
+	if !legacyAddonProject(appName) {
+		args = append(args, "--remove-orphans")
+	}
 
 	// Add --scale flags for services with replicas > 1
 	for _, svc := range services {
@@ -145,6 +161,45 @@ type ComposeFile struct {
 	Networks map[string]interface{} `yaml:"networks,omitempty"`
 	Secrets  map[string]interface{} `yaml:"secrets,omitempty"`
 	XPortico *PorticoMetadata       `yaml:"x-portico,omitempty"`
+	// Other top-level keys (volumes, configs, x-*, ...) are kept as-is
+	Extra map[string]interface{} `yaml:",inline"`
+}
+
+// composeHash returns the hash of a compose file, computed without the hash field itself
+func composeHash(c *ComposeFile) (string, error) {
+	var saved string
+	if c.XPortico != nil {
+		saved = c.XPortico.Generated
+		c.XPortico.Generated = ""
+		defer func() { c.XPortico.Generated = saved }()
+	}
+	data, err := yaml.Marshal(c)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x", sha256.Sum256(data)), nil
+}
+
+// AcceptManualChanges stores the hash of the current docker-compose.yml so that
+// manual edits are no longer reported as unexpected changes.
+func (dm *Manager) AcceptManualChanges(appDir string) error {
+	compose, err := dm.LoadComposeFile(appDir)
+	if err != nil {
+		return err
+	}
+	if compose.XPortico == nil {
+		compose.XPortico = &PorticoMetadata{}
+	}
+	hash, err := composeHash(compose)
+	if err != nil {
+		return err
+	}
+	compose.XPortico.Generated = hash
+	data, err := yaml.Marshal(compose)
+	if err != nil {
+		return err
+	}
+	return util.WriteFileAtomic(filepath.Join(appDir, "docker-compose.yml"), data, 0o644)
 }
 
 // PorticoMetadata stores Portico-specific configuration
@@ -152,7 +207,57 @@ type PorticoMetadata struct {
 	Domain      string `yaml:"domain,omitempty"`
 	Port        int    `yaml:"http_port,omitempty"`
 	HttpEnabled bool   `yaml:"http_enabled,omitempty"`
-	Generated   string `yaml:"generated_hash,omitempty"` // SHA256 hash of the generated content
+	HttpService string `yaml:"http_service,omitempty"` // Service Caddy proxies to
+	// HTTP port to restore when HTTP is re-enabled (only set while it is disabled)
+	DisabledPort int            `yaml:"disabled_http_port,omitempty"`
+	Replicas     map[string]int `yaml:"replicas,omitempty"`       // Service name -> replicas (only when > 1)
+	Generated    string         `yaml:"generated_hash,omitempty"` // SHA256 hash of the generated content
+}
+
+// SecretsMount is the volume Portico adds to every service to expose app secrets
+const SecretsMount = "./env:/run/secrets:ro"
+
+// logsMountPrefix is the host prefix of the per-service logs mount added by the compose template
+const logsMountPrefix = "/home/portico/logs/apps/"
+
+// IsManagedVolume reports whether a volume entry is one Portico adds automatically
+// (secrets mount or logs mount), so it must not be treated as a user volume.
+func IsManagedVolume(vol string) bool {
+	return vol == SecretsMount || strings.Contains(vol, ":/run/secrets") || strings.HasPrefix(vol, logsMountPrefix)
+}
+
+// ServiceAlias returns the DNS alias of a service on portico-network
+func ServiceAlias(appName, serviceName string) string {
+	return appName + "-" + serviceName
+}
+
+// TemplateFuncs are the helper functions available to docker-compose templates
+var TemplateFuncs = template.FuncMap{
+	// quote renders a string as a YAML double-quoted scalar (JSON strings are valid YAML)
+	"quote": func(s string) string {
+		b, err := json.Marshal(s)
+		if err != nil {
+			return `""`
+		}
+		return string(b)
+	},
+}
+
+// templateMetadata returns the metadata to expose to the template (without the hash)
+func templateMetadata(existing, metadata *PorticoMetadata) *PorticoMetadata {
+	src := metadata
+	if src == nil {
+		src = existing
+	}
+	if src == nil {
+		return nil
+	}
+	copied := *src
+	copied.Generated = ""
+	if copied.Port > 0 {
+		copied.HttpEnabled = true
+	}
+	return &copied
 }
 
 // LoadComposeFile loads and parses an existing docker-compose.yml
@@ -223,19 +328,22 @@ func (dm *Manager) GenerateDockerCompose(appDir string, services []Service, meta
 		return err
 	}
 
-	// Update Portico metadata
-	if metadata != nil {
-		existing.XPortico = metadata
-	}
-
-	// Prepare template services with merge
+	// Prepare template services.
+	// The services passed in are the complete desired state (callers load the app
+	// from docker-compose.yml, modify it and pass it back), so Portico-managed
+	// fields (environment, volumes, ...) are taken from them as-is. Merging the old
+	// values back in would make deletions (env/storage delete) impossible.
 	templateServices := []TemplateService{}
 	for _, svc := range services {
+		env := make(map[string]string, len(svc.Environment))
+		for k, v := range svc.Environment {
+			env[k] = v
+		}
+
 		templateSvc := TemplateService{
 			Name:        svc.Name,
 			Image:       svc.Image,
-			Environment: svc.Environment,
-			Volumes:     svc.Volumes,
+			Environment: env,
 			Secrets:     svc.Secrets,
 			DependsOn:   svc.DependsOn,
 		}
@@ -243,41 +351,19 @@ func (dm *Manager) GenerateDockerCompose(appDir string, services []Service, meta
 		// Handle ports - only expose ports explicitly added via ExtraPorts
 		// Services communicate via internal DNS (service name) on portico-network
 		// No need to expose ports to host for web services (Caddy uses internal DNS)
-		templateSvc.Ports = append(templateSvc.Ports, svc.ExtraPorts...)
+		templateSvc.Ports = append([]string{}, svc.ExtraPorts...)
 
-		// Always add secrets mount
-		templateSvc.Volumes = append(templateSvc.Volumes, "./env:/run/secrets:ro")
-
-		// If service exists, try to preserve custom fields from existing
-		if existingSvc, ok := existing.Services[svc.Name].(map[string]interface{}); ok {
-			// Preserve custom environment variables if they exist
-			if existingEnv, ok := existingSvc["environment"].([]interface{}); ok {
-				// Merge with existing environment
-				for _, envItem := range existingEnv {
-					if envStr, ok := envItem.(string); ok {
-						parts := strings.SplitN(envStr, "=", 2)
-						if len(parts) == 2 {
-							// Only preserve if not managed by Portico
-							if _, exists := templateSvc.Environment[parts[0]]; !exists {
-								templateSvc.Environment[parts[0]] = parts[1]
-							}
-						}
-					}
-				}
+		// User volumes (deduplicated, without the mounts Portico adds itself),
+		// followed by the secrets mount.
+		seen := make(map[string]bool)
+		for _, vol := range svc.Volumes {
+			if vol == "" || IsManagedVolume(vol) || seen[vol] {
+				continue
 			}
-
-			// Preserve custom volumes (excluding the secrets mount)
-			if existingVolumes, ok := existingSvc["volumes"].([]interface{}); ok {
-				for _, vol := range existingVolumes {
-					if volStr, ok := vol.(string); ok {
-						// Only preserve if not the secrets mount and not in Portico-managed volumes
-						if volStr != "./env:/run/secrets:ro" && !contains(templateSvc.Volumes[:len(templateSvc.Volumes)-1], volStr) {
-							templateSvc.Volumes = append(templateSvc.Volumes[:len(templateSvc.Volumes)-1], volStr, "./env:/run/secrets:ro")
-						}
-					}
-				}
-			}
+			seen[vol] = true
+			templateSvc.Volumes = append(templateSvc.Volumes, vol)
 		}
+		templateSvc.Volumes = append(templateSvc.Volumes, SecretsMount)
 
 		templateServices = append(templateServices, templateSvc)
 	}
@@ -302,7 +388,7 @@ func (dm *Manager) GenerateDockerCompose(appDir string, services []Service, meta
 		AppName:  appName,
 		Services: templateServices,
 		Secrets:  templateSecrets,
-		XPortico: existing.XPortico,
+		XPortico: templateMetadata(existing.XPortico, metadata),
 	}
 
 	// Load template from filesystem first, then embedded files
@@ -316,19 +402,13 @@ func (dm *Manager) GenerateDockerCompose(appDir string, services []Service, meta
 		return fmt.Errorf("error reading docker-compose template: %w", err)
 	}
 
-	t, err := template.New("docker-compose").Parse(string(templateDataBytes))
+	t, err := template.New("docker-compose").Funcs(TemplateFuncs).Parse(string(templateDataBytes))
 	if err != nil {
 		return fmt.Errorf("error parsing docker-compose template: %w", err)
 	}
 
-	// Generate YAML from template (without hash first)
-	templateDataWithoutHash := templateData
-	if templateDataWithoutHash.XPortico != nil {
-		templateDataWithoutHash.XPortico.Generated = ""
-	}
-
 	var bufWithoutHash bytes.Buffer
-	if err := t.Execute(&bufWithoutHash, templateDataWithoutHash); err != nil {
+	if err := t.Execute(&bufWithoutHash, templateData); err != nil {
 		return fmt.Errorf("error executing docker-compose template: %w", err)
 	}
 
@@ -366,6 +446,17 @@ func (dm *Manager) GenerateDockerCompose(appDir string, services []Service, meta
 		}
 	}
 
+	// Preserve other top-level keys (named volumes, configs, x-* extensions, ...)
+	for key, value := range existing.Extra {
+		if _, managed := generated.Extra[key]; managed {
+			continue
+		}
+		if generated.Extra == nil {
+			generated.Extra = make(map[string]interface{})
+		}
+		generated.Extra[key] = value
+	}
+
 	// Preserve custom networks (if any other than portico-network)
 	for netName, netConfig := range existing.Networks {
 		if netName != "portico-network" {
@@ -376,7 +467,22 @@ func (dm *Manager) GenerateDockerCompose(appDir string, services []Service, meta
 		}
 	}
 
+	// Attach every service to portico-network with a unique "<app>-<service>" alias.
+	// Docker Compose only registers "<service>" and "<app>-<service>-<n>" as DNS
+	// names; "<service>" collides between apps sharing the network, so Caddy
+	// proxies to the alias instead (it also resolves to every replica).
+	for svcName, svc := range generated.Services {
+		if svcMap, ok := svc.(map[string]interface{}); ok {
+			svcMap["networks"] = map[string]interface{}{
+				"portico-network": map[string]interface{}{
+					"aliases": []string{ServiceAlias(appName, svcName)},
+				},
+			}
+		}
+	}
+
 	// Set metadata
+	previous := existing.XPortico
 	if generated.XPortico == nil {
 		generated.XPortico = &PorticoMetadata{}
 	}
@@ -389,21 +495,47 @@ func (dm *Manager) GenerateDockerCompose(appDir string, services []Service, meta
 		} else {
 			generated.XPortico.HttpEnabled = metadata.HttpEnabled
 		}
+		generated.XPortico.HttpService = metadata.HttpService
+	}
+	// Remember the HTTP port while HTTP is disabled so it can be restored later
+	if generated.XPortico.HttpEnabled {
+		generated.XPortico.DisabledPort = 0
+	} else {
+		generated.XPortico.Port = 0
+		switch {
+		case metadata != nil && metadata.DisabledPort > 0:
+			generated.XPortico.DisabledPort = metadata.DisabledPort
+		case previous != nil && previous.HttpEnabled && previous.Port > 0:
+			generated.XPortico.DisabledPort = previous.Port
+		case previous != nil:
+			generated.XPortico.DisabledPort = previous.DisabledPort
+		}
+	}
+	// Keep the previously selected HTTP service when the caller didn't choose one
+	if generated.XPortico.HttpService == "" && previous != nil {
+		generated.XPortico.HttpService = previous.HttpService
+	}
+	// Forget the HTTP service if it no longer exists
+	if _, ok := generated.Services[generated.XPortico.HttpService]; !ok {
+		generated.XPortico.HttpService = ""
 	}
 
-	// Calculate hash BEFORE adding the hash field itself
-	// Temporarily remove hash if it exists
-	generated.XPortico.Generated = ""
-	dataWithoutHash, err := yaml.Marshal(generated)
+	// Persist replica counts so up/reset/deploy keep the scale
+	generated.XPortico.Replicas = nil
+	for _, svc := range services {
+		if svc.Replicas > 1 {
+			if generated.XPortico.Replicas == nil {
+				generated.XPortico.Replicas = make(map[string]int)
+			}
+			generated.XPortico.Replicas[svc.Name] = svc.Replicas
+		}
+	}
+
+	// Calculate the hash of the content without the hash field itself
+	hashStr, err := composeHash(&generated)
 	if err != nil {
 		return fmt.Errorf("error marshaling docker-compose.yml for hash: %w", err)
 	}
-
-	// Calculate hash of content without the hash field
-	hash := sha256.Sum256(dataWithoutHash)
-	hashStr := fmt.Sprintf("%x", hash)
-
-	// Now add the hash to metadata
 	generated.XPortico.Generated = hashStr
 
 	// Marshal final version with hash
@@ -412,7 +544,7 @@ func (dm *Manager) GenerateDockerCompose(appDir string, services []Service, meta
 		return fmt.Errorf("error marshaling final docker-compose: %w", err)
 	}
 
-	if err := os.WriteFile(composeFile, finalData, 0o644); err != nil {
+	if err := util.WriteFileAtomic(composeFile, finalData, 0o644); err != nil {
 		return fmt.Errorf("error writing docker-compose.yml: %w", err)
 	}
 
@@ -423,16 +555,6 @@ func (dm *Manager) GenerateDockerCompose(appDir string, services []Service, meta
 	}
 
 	return nil
-}
-
-// contains checks if a string slice contains a value
-func contains(slice []string, value string) bool {
-	for _, v := range slice {
-		if v == value {
-			return true
-		}
-	}
-	return false
 }
 
 // GetPorticoMetadata extracts Portico metadata from docker-compose.yml
@@ -459,9 +581,7 @@ func (dm *Manager) GetPorticoMetadata(appDir string) (*PorticoMetadata, error) {
 func (dm *Manager) DetectManualChanges(appDir string) (bool, error) {
 	composeFile := filepath.Join(appDir, "docker-compose.yml")
 
-	// Read current docker-compose.yml
-	currentData, err := os.ReadFile(composeFile)
-	if err != nil {
+	if _, err := os.Stat(composeFile); err != nil {
 		if os.IsNotExist(err) {
 			return false, nil // No compose file = not manually modified
 		}
@@ -481,25 +601,10 @@ func (dm *Manager) DetectManualChanges(appDir string) (bool, error) {
 
 	storedHash := compose.XPortico.Generated
 
-	// Parse current file and remove hash for comparison
-	var currentCompose ComposeFile
-	if err := yaml.Unmarshal(currentData, &currentCompose); err != nil {
-		return false, err
-	}
-
-	// Remove hash from current compose for comparison
-	if currentCompose.XPortico != nil {
-		currentCompose.XPortico.Generated = ""
-	}
-
-	currentWithoutHash, err := yaml.Marshal(&currentCompose)
+	currentHashStr, err := composeHash(compose)
 	if err != nil {
 		return false, err
 	}
-
-	// Calculate hash of current content (without hash field)
-	currentHash := sha256.Sum256(currentWithoutHash)
-	currentHashStr := fmt.Sprintf("%x", currentHash)
 
 	// If stored hash doesn't match current hash, file was manually modified
 	return currentHashStr != storedHash, nil
@@ -516,47 +621,6 @@ type Service struct {
 	Secrets     []string
 	DependsOn   []string
 	Replicas    int // Number of instances (default: 1, 0 means 1)
-}
-
-// GetContainerStatus returns the status of containers for an app
-func (dm *Manager) GetContainerStatus(appDir string) ([]ContainerStatus, error) {
-	// Validate appDir path to prevent path traversal
-	if !filepath.IsAbs(appDir) {
-		appDir, _ = filepath.Abs(appDir)
-	}
-
-	composeFile := filepath.Join(appDir, "docker-compose.yml")
-	// Extract app name from directory for consistent project naming
-	appName := filepath.Base(appDir)
-	cmd := exec.Command("docker", "compose", "-f", composeFile, "-p", appName, "ps", "--format", "json")
-	cmd.Dir = appDir
-
-	output, err := cmd.Output()
-	if err != nil {
-		return nil, fmt.Errorf("error getting container status: %w", err)
-	}
-
-	var statuses []ContainerStatus
-	scanner := bufio.NewScanner(bytes.NewReader(output))
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line != "" {
-			// Parse JSON line to extract container info
-			// This is a simplified version - in production you'd use proper JSON parsing
-			statuses = append(statuses, ContainerStatus{
-				Name:   "container", // Extract from JSON
-				Status: "running",   // Extract from JSON
-			})
-		}
-	}
-
-	return statuses, nil
-}
-
-// ContainerStatus represents the status of a container
-type ContainerStatus struct {
-	Name   string
-	Status string
 }
 
 // ensureNetworkExists ensures that a Docker network exists, creating it if necessary
@@ -576,4 +640,42 @@ func (dm *Manager) ensureNetworkExists(networkName string) error {
 	}
 
 	return nil
+}
+
+// SetServiceField sets a field that Portico does not manage (e.g. "command") on a
+// service in docker-compose.yml. Unmanaged fields are preserved by
+// GenerateDockerCompose, so callers should regenerate afterwards to refresh the hash.
+func (dm *Manager) SetServiceField(appDir, serviceName, key string, value interface{}) error {
+	compose, err := dm.LoadComposeFile(appDir)
+	if err != nil {
+		return err
+	}
+	svc, ok := compose.Services[serviceName].(map[string]interface{})
+	if !ok {
+		return fmt.Errorf("service %s not found in docker-compose.yml", serviceName)
+	}
+	svc[key] = value
+
+	data, err := yaml.Marshal(compose)
+	if err != nil {
+		return fmt.Errorf("error marshaling docker-compose.yml: %w", err)
+	}
+	return util.WriteFileAtomic(filepath.Join(appDir, "docker-compose.yml"), data, 0o644)
+}
+
+// legacyAddonProject reports whether an addon instance created before addon
+// projects were namespaced uses name as its compose project
+func legacyAddonProject(name string) bool {
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		return true // unknown: be conservative
+	}
+	data, err := os.ReadFile(filepath.Join(cfg.AddonsDir, "instances", name, "docker-compose.yml"))
+	if err != nil {
+		return false
+	}
+	var compose struct {
+		Name string `yaml:"name"`
+	}
+	return yaml.Unmarshal(data, &compose) != nil || compose.Name == "" || compose.Name == name
 }

@@ -4,10 +4,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 
 	"github.com/maxvegac/portico/src/internal/embed"
+	"github.com/maxvegac/portico/src/internal/util"
 )
 
 // Manager handles addon operations
@@ -90,23 +94,28 @@ func (am *Manager) LoadDefinition(addonType string) (*Definition, error) {
 	return &def, nil
 }
 
-// GetAvailableVersions returns list of available versions for an addon
+// GetAvailableVersions returns the versions of an addon, newest first
 func (def *Definition) GetAvailableVersions() []string {
 	versions := make([]string, 0, len(def.Versions))
 	for version := range def.Versions {
 		versions = append(versions, version)
 	}
+	sort.Slice(versions, func(i, j int) bool { return compareVersions(versions[i], versions[j]) > 0 })
 	return versions
 }
 
-// GetVersionConfig returns the configuration for a specific version
+// LatestVersion returns the newest available version ("" if none)
+func (def *Definition) LatestVersion() string {
+	if versions := def.GetAvailableVersions(); len(versions) > 0 {
+		return versions[0]
+	}
+	return ""
+}
+
+// GetVersionConfig returns the configuration of a version (the latest one if version is empty)
 func (def *Definition) GetVersionConfig(version string) (*VersionConfig, error) {
 	if version == "" {
-		// Use first available version as default
-		for v := range def.Versions {
-			version = v
-			break
-		}
+		version = def.LatestVersion()
 		if version == "" {
 			return nil, fmt.Errorf("no versions available")
 		}
@@ -120,7 +129,27 @@ func (def *Definition) GetVersionConfig(version string) (*VersionConfig, error) 
 	return &config, nil
 }
 
-// Instance represents an addon instance
+// compareVersions compares dotted version strings numerically ("8.4.7" > "8.4" > "5.7")
+func compareVersions(a, b string) int {
+	pa, pb := strings.Split(a, "."), strings.Split(b, ".")
+	for i := 0; i < len(pa) || i < len(pb); i++ {
+		var na, nb int
+		if i < len(pa) {
+			na, _ = strconv.Atoi(pa[i])
+		}
+		if i < len(pb) {
+			nb, _ = strconv.Atoi(pb[i])
+		}
+		if na != nb {
+			if na > nb {
+				return 1
+			}
+			return -1
+		}
+	}
+	return strings.Compare(a, b)
+}
+
 type Instance struct {
 	Name    string   `yaml:"name"`
 	Type    string   `yaml:"type"`
@@ -129,7 +158,8 @@ type Instance struct {
 	App     string   `yaml:"app,omitempty"`  // For dedicated mode
 	Apps    []string `yaml:"apps,omitempty"` // For shared mode
 	Port    int      `yaml:"port"`
-	Domain  string   `yaml:"domain,omitempty"`
+	Domain  string   `yaml:"domain,omitempty"` // Public domain (admin tools published by Caddy)
+	Target  string   `yaml:"target,omitempty"` // Database instance managed by an admin tool
 	DataDir string   `yaml:"data_dir"`
 }
 
@@ -175,5 +205,5 @@ func (am *Manager) SaveConfig(config *Config) error {
 		return fmt.Errorf("error marshaling config: %w", err)
 	}
 
-	return os.WriteFile(am.ConfigFile, data, 0o644)
+	return util.WriteFileAtomic(am.ConfigFile, data, 0o644)
 }

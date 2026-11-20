@@ -12,6 +12,7 @@ import (
 	"github.com/maxvegac/portico/src/internal/app"
 	"github.com/maxvegac/portico/src/internal/config"
 	"github.com/maxvegac/portico/src/internal/docker"
+	"github.com/maxvegac/portico/src/internal/util"
 )
 
 // NewAddonAddCmd adds an inline addon (redis/valkey) as a service to an app
@@ -58,6 +59,9 @@ func NewAddonAddCmd() *cobra.Command {
 			}
 
 			// Get version config
+			if version == "" {
+				version = def.LatestVersion()
+			}
 			versionConfig, err := def.GetVersionConfig(version)
 			if err != nil {
 				fmt.Printf("Error: %v\n", err)
@@ -106,26 +110,32 @@ func NewAddonAddCmd() *cobra.Command {
 			// Add secrets
 			newService.Secrets = versionConfig.Secrets
 
-			// Add ports
-			for _, portConfig := range versionConfig.Ports {
-				if portConfig.External > 0 {
-					newService.ExtraPorts = append(newService.ExtraPorts, fmt.Sprintf("%d:%d", portConfig.External, portConfig.Internal))
-				}
-			}
+			// No host ports: other services reach the addon over portico-network
+			// using its "<app>-<addon>" alias.
 
 			// Create secrets directory and files first
 			appDir := filepath.Join(cfg.AppsDir, appName)
 			envDir := filepath.Join(appDir, "env")
+			if err := os.MkdirAll(envDir, 0o755); err != nil {
+				fmt.Printf("Error creating env directory: %v\n", err)
+				return
+			}
 
-			var addonPassword string
+			var addonPassword, passwordSecret string
 			for _, secretName := range versionConfig.Secrets {
 				secretPath := filepath.Join(envDir, secretName)
-				defaultValue := generateSecret(secretName)
-				if err := os.WriteFile(secretPath, []byte(defaultValue), 0o600); err != nil {
-					fmt.Printf("Warning: could not create secret %s: %v\n", secretName, err)
+				value, err := generateSecret(secretName)
+				if err != nil {
+					fmt.Printf("Error: %v\n", err)
+					return
+				}
+				if err := os.WriteFile(secretPath, []byte(value), 0o600); err != nil {
+					fmt.Printf("Error creating secret %s: %v\n", secretName, err)
+					return
 				}
 				if strings.Contains(strings.ToLower(secretName), "password") {
-					addonPassword = defaultValue
+					addonPassword = value
+					passwordSecret = secretName
 				}
 			}
 
@@ -134,23 +144,19 @@ func NewAddonAddCmd() *cobra.Command {
 
 			// Add environment variables to other services for connection
 			envPrefix := strings.ToUpper(addonType)
+			host := docker.ServiceAlias(appName, addonType)
 			for i := range a.Services {
 				if a.Services[i].Name != addonType { // Don't add to the addon service itself
 					if a.Services[i].Environment == nil {
 						a.Services[i].Environment = make(map[string]string)
 					}
-					a.Services[i].Environment[envPrefix+"_HOST"] = addonType
+					a.Services[i].Environment[envPrefix+"_HOST"] = host
 					a.Services[i].Environment[envPrefix+"_PORT"] = fmt.Sprintf("%d", def.DefaultPort)
 					if addonPassword != "" {
 						a.Services[i].Environment[envPrefix+"_PASSWORD"] = addonPassword
+						a.Services[i].Environment[envPrefix+"_URL"] = fmt.Sprintf("redis://:%s@%s:%d", addonPassword, host, def.DefaultPort)
 					}
 				}
-			}
-
-			// Save app
-			if err := appManager.SaveApp(a); err != nil {
-				fmt.Printf("Error saving app: %v\n", err)
-				return
 			}
 
 			// Create addon data directory
@@ -159,43 +165,36 @@ func NewAddonAddCmd() *cobra.Command {
 				fmt.Printf("Warning: could not create addon data directory: %v\n", err)
 			}
 
-			// Regenerate docker-compose and redeploy
-			dm := docker.NewManager(cfg.Registry.URL)
-			var dockerServices []docker.Service
-			for _, s := range a.Services {
-				replicas := s.Replicas
-				if replicas == 0 {
-					replicas = 1 // Default to 1 if not specified
+			_ = util.FixDirOwnership(envDir)
+			_ = util.FixDirOwnership(filepath.Join(appDir, "addons", addonType)) // only the new (empty) data dir
+
+			// Save app (generates the service in docker-compose.yml)
+			if err := appManager.SaveApp(a); err != nil {
+				fmt.Printf("Error saving app: %v\n", err)
+				return
+			}
+
+			// The redis/valkey images ignore *_PASSWORD_FILE: enforce the password with
+			// --requirepass (kept across regenerations since "command" is not Portico-managed)
+			if passwordSecret != "" {
+				server := "redis-server"
+				if addonType == "valkey" {
+					server = "valkey-server"
 				}
-				dockerServices = append(dockerServices, docker.Service{
-					Name:        s.Name,
-					Image:       s.Image,
-					Port:        s.Port,
-					ExtraPorts:  s.ExtraPorts,
-					Environment: s.Environment,
-					Volumes:     s.Volumes,
-					Secrets:     s.Secrets,
-					DependsOn:   s.DependsOn,
-					Replicas:    replicas,
-				})
+				command := []string{"sh", "-c", fmt.Sprintf(`exec %s --requirepass "$$(cat /run/secrets/%s)"`, server, passwordSecret)}
+				dm := docker.NewManager(cfg.Registry.URL)
+				if err := dm.SetServiceField(appDir, addonType, "command", command); err != nil {
+					fmt.Printf("Error configuring %s password: %v\n", addonType, err)
+					return
+				}
 			}
 
-			metadata := &docker.PorticoMetadata{
-				Domain: a.Domain,
-				Port:   a.Port,
-			}
-
-			if err := dm.GenerateDockerCompose(appDir, dockerServices, metadata); err != nil {
-				fmt.Printf("Error generating docker compose: %v\n", err)
+			if err := applyApp(cfg, appManager, a); err != nil {
+				fmt.Printf("Error: %v\n", err)
 				return
 			}
 
-			if err := dm.DeployApp(appDir, dockerServices); err != nil {
-				fmt.Printf("Error deploying app: %v\n", err)
-				return
-			}
-
-			fmt.Printf("Addon %s (version %s) added to app %s\n", addonType, version, appName)
+			fmt.Printf("Addon %s %s added to app %s (host: %s)\n", addonType, version, appName, host)
 		},
 	}
 

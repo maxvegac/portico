@@ -1,0 +1,11 @@
+name: adminer
+type: tool
+description: Adminer web UI for PostgreSQL, MySQL and MariaDB
+default_port: 9080
+service_mode: shared
+
+versions:
+  "5":
+    image: adminer:5
+    ports:
+      - internal: 8080

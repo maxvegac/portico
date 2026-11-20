@@ -11,6 +11,7 @@ import (
 	"github.com/maxvegac/portico/src/internal/app"
 	"github.com/maxvegac/portico/src/internal/config"
 	"github.com/maxvegac/portico/src/internal/docker"
+	"github.com/maxvegac/portico/src/internal/util"
 )
 
 // NewSecretsDeleteCmd deletes a secret file for a service in an app
@@ -34,6 +35,10 @@ func NewSecretsDeleteCmd() *cobra.Command {
 			serviceName, _ := getServiceNameFromSecretsArgs(cmd)
 
 			secretName := strings.TrimSpace(args[0])
+			if err := util.ValidateSecretName(secretName); err != nil {
+				fmt.Printf("Error: %v\n", err)
+				return
+			}
 
 			if secretName == "" {
 				fmt.Println("Error: secret-name is required")
@@ -97,53 +102,30 @@ func NewSecretsDeleteCmd() *cobra.Command {
 				return
 			}
 
-			// Delete secret file
+			// Save (regenerates docker-compose.yml), redeploy and refresh the proxy
+			if err := applyApp(cfg, am, a); err != nil {
+				fmt.Printf("Error: %v\n", err)
+				return
+			}
+
+			// Delete the secret file only if no other service still uses it
 			appDir := filepath.Join(cfg.AppsDir, appName)
-			secretPath := filepath.Join(appDir, "env", secretName)
-			if err := os.Remove(secretPath); err != nil && !os.IsNotExist(err) {
-				fmt.Printf("Warning: could not delete secret file: %v\n", err)
-			}
-
-			if err := am.SaveApp(a); err != nil {
-				fmt.Printf("Error saving app: %v\n", err)
-				return
-			}
-
-			// Regenerate docker-compose and redeploy
-			dm := docker.NewManager(cfg.Registry.URL)
-
-			var dockerServices []docker.Service
+			stillUsed := false
 			for _, s := range a.Services {
-				replicas := s.Replicas
-				if replicas == 0 {
-					replicas = 1 // Default to 1 if not specified
+				for _, secret := range s.Secrets {
+					if secret == secretName {
+						stillUsed = true
+					}
 				}
-				dockerServices = append(dockerServices, docker.Service{
-					Name:        s.Name,
-					Image:       s.Image,
-					Port:        s.Port,
-					ExtraPorts:  s.ExtraPorts,
-					Environment: s.Environment,
-					Volumes:     s.Volumes,
-					Secrets:     s.Secrets,
-					DependsOn:   s.DependsOn,
-					Replicas:    replicas,
-				})
+			}
+			if !stillUsed {
+				secretPath := filepath.Join(appDir, "env", secretName)
+				if err := os.Remove(secretPath); err != nil && !os.IsNotExist(err) {
+					fmt.Printf("Warning: could not delete secret file: %v\n", err)
+				}
 			}
 
-			metadata := &docker.PorticoMetadata{
-				Domain: a.Domain,
-				Port:   a.Port,
-			}
-
-			if err := dm.GenerateDockerCompose(appDir, dockerServices, metadata); err != nil {
-				fmt.Printf("Error generating docker compose: %v\n", err)
-				return
-			}
-			if err := dm.DeployApp(appDir, dockerServices); err != nil {
-				fmt.Printf("Error deploying app: %v\n", err)
-				return
-			}
+			dm := docker.NewManager(cfg.Registry.URL)
 
 			// Restart the service to apply removed secret
 			if err := dm.RestartService(appDir, serviceName); err != nil {

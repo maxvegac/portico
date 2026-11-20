@@ -1,44 +1,39 @@
 package commands
 
 import (
-	"os"
+	"fmt"
+	"regexp"
 
 	"github.com/spf13/cobra"
 )
 
-// NewDomainsCmd is the root command for domain management: domains [app-name] ...
+// domainRe matches a DNS hostname (optionally with a leading "*." wildcard label)
+var domainRe = regexp.MustCompile(`^(\*\.)?([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
+
+// validateDomain checks that a domain is a plain hostname. The value is written
+// into the Caddyfile, so anything else could inject Caddy configuration.
+func validateDomain(domain string) error {
+	if len(domain) > 253 || !domainRe.MatchString(domain) {
+		return fmt.Errorf("invalid domain %q", domain)
+	}
+	return nil
+}
+
+// NewDomainsCmd is the root command for `domains [app-name] add|remove <domain>`
 func NewDomainsCmd() *cobra.Command {
-	cmd := &cobra.Command{
+	return &cobra.Command{
 		Use:   "domains [app-name]",
 		Short: "Manage application domains",
-		Long:  "Manage domains for an application.",
-		Args:  cobra.MinimumNArgs(0),
+		Long:  "Manage domains for an application.\n\nExamples:\n  portico domains my-app add example.com\n  portico domains my-app remove example.com",
+		Args:  cobra.ArbitraryArgs,
+		// Arguments are dispatched to the subcommand (values may start with '-')
+		DisableFlagParsing: true,
+		Run:                newNestedRun("domains"),
 	}
-	return cmd
 }
 
 // getAppNameFromDomainsArgs extracts app-name from domains command arguments
-// It parses os.Args to find the app-name after "domains"
 func getAppNameFromDomainsArgs(cmd *cobra.Command) (string, error) {
-	// Parse os.Args to find app-name after "domains"
-	args := os.Args[1:] // Skip program name
-	for i, arg := range args {
-		if arg == "domains" {
-			// Next non-flag argument should be app-name
-			for j := i + 1; j < len(args); j++ {
-				// Skip if it's a flag
-				if args[j][0] == '-' {
-					continue
-				}
-				// Skip known subcommands
-				if args[j] == "add" || args[j] == "remove" {
-					continue
-				}
-				// This should be the app-name
-				return args[j], nil
-			}
-			break
-		}
-	}
-	return "", nil
+	appName, _ := nestedAppAndService(cmd)
+	return appName, nil
 }

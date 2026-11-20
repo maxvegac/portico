@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -15,30 +14,34 @@ import (
 
 // NewSSHAddCmd adds an SSH public key
 func NewSSHAddCmd() *cobra.Command {
+	var admin bool
+
 	cmd := &cobra.Command{
 		Use:   "add [key-or-file] [key-name]",
 		Short: "Add an SSH public key",
 		Long: `Add an SSH public key to allow git push deployment.
 
 If the first argument is a file path that exists, it will be read as a key file.
-Otherwise, it will be treated as the key content itself.
+Use "-" to read the key from stdin. Otherwise it is treated as the key itself.
 If key-name is not provided, a default name will be generated.
+
+By default the key can only run git push/fetch against Portico repositories
+(the portico user is in the docker group, so a shell would be root-equivalent).
+Use --admin to grant full shell access.
 
 Examples:
   # Add key from file with custom name
-  portico ssh add ~/.ssh/id_rsa.pub "ci-deployment"
+  portico ssh add ~/.ssh/id_ed25519.pub ci-deployment
 
-  # Add key from file with default name
-  portico ssh add ~/.ssh/id_rsa.pub
-
-  # Add key directly with custom name
-  portico ssh add "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAA..." "my-key"
-
-  # Add key directly with default name
-  portico ssh add "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAA..."
+  # Add key directly
+  portico ssh add "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA..." my-key
 
   # Add key from stdin
-  cat ~/.ssh/id_rsa.pub | portico ssh add - "my-key"`,
+  cat ~/.ssh/id_ed25519.pub | portico ssh add - my-key
+
+Then deploy with:
+  git remote add portico portico@<server>:<app-name>.git
+  git push portico main`,
 		Args: cobra.RangeArgs(1, 2),
 		Run: func(_ *cobra.Command, args []string) {
 			cfg, err := config.LoadConfig()
@@ -47,118 +50,88 @@ Examples:
 				return
 			}
 
-			porticoHome := cfg.PorticoHome
-			sshDir := filepath.Join(porticoHome, ".ssh")
-			authorizedKeysPath := filepath.Join(sshDir, "authorized_keys")
-
-			var keyContent string
-			var keyName string
-
-			// Get key name (second argument or default)
-			if len(args) >= 2 {
+			keyName := fmt.Sprintf("key-%d", time.Now().Unix())
+			if len(args) >= 2 && strings.TrimSpace(args[1]) != "" {
 				keyName = strings.TrimSpace(args[1])
 			}
-			if keyName == "" {
-				// Generate default name based on timestamp
-				keyName = fmt.Sprintf("key-%d", time.Now().Unix())
+			if !keyNameRe.MatchString(keyName) {
+				fmt.Printf("Error: invalid key name %q (use letters, digits and . _ @ : + -, max 64 chars)\n", keyName)
+				return
 			}
 
 			// Get key content
+			var keyContent string
 			firstArg := strings.TrimSpace(args[0])
-
-			// Check if first argument is a file (or "-" for stdin)
 			if firstArg == "-" {
-				// Read from stdin
 				scanner := bufio.NewScanner(os.Stdin)
-				if scanner.Scan() {
-					keyContent = strings.TrimSpace(scanner.Text())
-				} else {
+				scanner.Buffer(make([]byte, 64*1024), 64*1024)
+				if !scanner.Scan() {
 					fmt.Println("Error: No key provided from stdin")
 					return
 				}
+				keyContent = scanner.Text()
 			} else if _, err := os.Stat(firstArg); err == nil {
-				// File exists, read from file
 				data, err := os.ReadFile(firstArg)
 				if err != nil {
 					fmt.Printf("Error reading key file: %v\n", err)
 					return
 				}
-				keyContent = strings.TrimSpace(string(data))
+				keyContent = string(data)
 			} else {
-				// Treat as key content directly
 				keyContent = firstArg
 			}
 
-			if keyContent == "" {
-				fmt.Println("Error: Empty key provided")
+			// Only the first line counts: a key never spans lines, and extra lines
+			// would let a single "key" add arbitrary authorized_keys entries.
+			keyContent = strings.TrimSpace(strings.SplitN(strings.TrimSpace(keyContent), "\n", 2)[0])
+			key, err := parseAuthorizedKey(keyContent)
+			if err != nil {
+				fmt.Printf("Error: %v\n", err)
 				return
 			}
 
-			// Validate key format (basic check)
-			parts := strings.Fields(keyContent)
-			if len(parts) < 2 {
-				fmt.Println("Error: Invalid SSH key format. Expected format: 'algorithm key-data [comment]'")
+			// Never trust options coming from the input
+			key.Options = ""
+			if !admin {
+				key.Options = restrictedKeyOptions()
+			}
+			key.Comment = keyName
+
+			path := authorizedKeysPath(cfg.PorticoHome)
+			lines, err := readAuthorizedKeys(path)
+			if err != nil {
+				fmt.Printf("Error reading authorized_keys: %v\n", err)
 				return
 			}
 
-			// Replace or add comment with key name
-			keyParts := strings.Fields(keyContent)
-			if len(keyParts) >= 2 {
-				// Keep algorithm and key, replace comment with key name
-				keyContent = fmt.Sprintf("%s %s %s", keyParts[0], keyParts[1], keyName)
-			}
-
-			// Ensure .ssh directory exists
-			if err := os.MkdirAll(sshDir, 0o700); err != nil {
-				fmt.Printf("Error creating .ssh directory: %v\n", err)
-				return
-			}
-
-			// Read existing keys to check for duplicates
-			existingKeys := make(map[string]bool)
-			if data, err := os.ReadFile(authorizedKeysPath); err == nil {
-				lines := strings.Split(string(data), "\n")
-				for _, line := range lines {
-					line = strings.TrimSpace(line)
-					if line != "" && !strings.HasPrefix(line, "#") {
-						// Extract key part (algorithm + key data)
-						parts := strings.Fields(line)
-						if len(parts) >= 2 {
-							keyPart := fmt.Sprintf("%s %s", parts[0], parts[1])
-							existingKeys[keyPart] = true
-						}
-					}
+			for _, line := range lines {
+				existing, err := parseAuthorizedKey(line)
+				if err != nil {
+					continue
 				}
-			}
-
-			// Check if key already exists
-			keyParts = strings.Fields(keyContent)
-			if len(keyParts) >= 2 {
-				keyPart := fmt.Sprintf("%s %s", keyParts[0], keyParts[1])
-				if existingKeys[keyPart] {
-					fmt.Println("⚠️  This SSH key already exists")
+				if existing.Data == key.Data {
+					fmt.Printf("⚠️  This SSH key already exists (name: %s)\n", existing.Comment)
+					return
+				}
+				if existing.Comment == keyName {
+					fmt.Printf("Error: a key named %s already exists\n", keyName)
 					return
 				}
 			}
 
-			// Append key to authorized_keys
-			file, err := os.OpenFile(authorizedKeysPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
-			if err != nil {
-				fmt.Printf("Error opening authorized_keys: %v\n", err)
-				return
-			}
-			defer func() {
-				_ = file.Close()
-			}()
-
-			if _, err := file.WriteString(keyContent + "\n"); err != nil {
-				fmt.Printf("Error writing key: %v\n", err)
+			if err := writeAuthorizedKeys(path, append(lines, key.String())); err != nil {
+				fmt.Printf("Error writing authorized_keys: %v\n", err)
 				return
 			}
 
-			fmt.Printf("✅ SSH key added successfully (name: %s)\n", keyName)
+			access := "git push only"
+			if admin {
+				access = "full shell access"
+			}
+			fmt.Printf("✅ SSH key added successfully (name: %s, %s, %s)\n", keyName, key.Fingerprint(), access)
 		},
 	}
 
+	cmd.Flags().BoolVar(&admin, "admin", false, "Grant full shell access instead of git push only")
 	return cmd
 }

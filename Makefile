@@ -1,10 +1,13 @@
 # Portico Makefile
 
-.PHONY: build install clean test run
+.PHONY: build install clean test run lint lint-fix vet fmt fmt-check check setup docker-build docker-run dev
+
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+LDFLAGS := -X main.version=$(VERSION)
 
 # Build the Portico CLI
 build:
-	go build -o bin/portico ./src/cmd/portico
+	go build -ldflags "$(LDFLAGS)" -o bin/portico ./src/cmd/portico
 
 # Install Portico CLI
 install: build
@@ -50,26 +53,17 @@ check: fmt-check vet lint test
 run: build
 	./bin/portico
 
-# Setup development environment
-setup:
-	mkdir -p /home/portico/{apps,reverse-proxy,static}
-	cp static/index.html /home/portico/static/
-	cp static/config.yml /home/portico/
-	cp static/docker-compose.yml /home/portico/reverse-proxy/
-	chown -R portico:portico /home/portico
-
-# Generate example docker compose
-example:
-	portico apps create sample-app
-	cp examples/sample-app/* /home/portico/apps/sample-app/
+# Setup development environment (extracts embedded static files to /home/portico)
+setup: build
+	./bin/portico init
 
 # Docker operations
 docker-build:
-	docker build -t portico:latest .
+	docker build --build-arg VERSION=$(VERSION) -t portico:latest .
 
 docker-run:
 	docker run -it --rm portico:latest
 
 # Development
 dev: build
-	./bin/portico apps list
+	./bin/portico list

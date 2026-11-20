@@ -21,8 +21,7 @@ Portico is a Platform as a Service (PaaS) similar to Dokku, but with the followi
 │   └── docker-compose.yml          # Caddy reverse proxy
 ├── apps/
 │   └── your-app/
-│       ├── app.yml
-│       ├── docker-compose.yml      # Application services
+│       ├── docker-compose.yml      # Application services (source of truth, metadata in x-portico)
 │       ├── Caddyfile
 │       └── env/                    # Secrets directory
 │           ├── database_password
@@ -38,8 +37,12 @@ Portico is a Platform as a Service (PaaS) similar to Dokku, but with the followi
 │       └── my-postgres/
 │           ├── docker-compose.yml
 │           └── data/
-├── static/
+├── repos/
+│   └── your-app.git                # Bare git repo for push-to-deploy
+├── templates/                      # Customizable templates (extracted by `portico init`)
+├── www/
 │   └── index.html                  # Welcome page - Catch-all
+├── logs/                           # Caddy access logs and app log mounts
 └── config.yml
 ```
 
@@ -48,8 +51,10 @@ Portico is a Platform as a Service (PaaS) similar to Dokku, but with the followi
 Portico uses embedded template files for generating configurations. Templates are included in the binary at build time:
 
 - `caddy-app.tmpl` - Individual app Caddy config (used for generating Caddyfiles)
-- `docker-compose.tmpl` - Not used (docker-compose.yml is generated directly in Go)
-- `app.yml.tmpl` - Not used (app.yml is only read for backwards compatibility)
+- `docker-compose.tmpl` - App docker-compose.yml (Portico merges back any fields it doesn't manage)
+
+`portico init` extracts them to `/home/portico/templates/`, where they can be customized
+(files there take precedence over the embedded ones).
 
 ## Installation
 
@@ -99,8 +104,11 @@ portico down my-app
 # Reset application (regenerate configs and restart)
 portico reset my-app
 
-# Destroy application
+# Destroy application (asks for confirmation; use --force in scripts)
 portico destroy my-app
+
+# Build the Dockerfile in the current directory and deploy it
+portico deploy my-app [--dockerfile Dockerfile.prod] [--build-arg KEY=VALUE] [--service web]
 
 # Change to application directory
 portico cd my-app
@@ -118,6 +126,59 @@ portico shell my-app [service] [shell]
 portico status my-app
 ```
 
+### Deploying
+
+```bash
+# On the server: authorize your key (git push only; --admin grants a full shell)
+portico ssh add ~/.ssh/id_ed25519.pub my-laptop
+portico ssh list
+portico ssh remove my-laptop
+
+# Push to deploy (builds the Dockerfile in the repository root;
+# the app and its repository are created on the first push)
+git remote add portico portico@your-server:my-app.git
+git push portico main
+
+# Deploy a pre-built image (e.g. from CI)
+portico service my-app web image ghcr.io/user/my-app:v1.2.3 [--port 3000]
+
+# Background worker (no HTTP)
+portico service my-app worker image ghcr.io/user/worker:latest --no-http-port
+
+# Scale a service
+portico service my-app web scale 3
+```
+
+### HTTP Configuration
+
+```bash
+# Internal container port Caddy proxies to (default: 8080)
+portico set my-app http-port 3000
+
+# Service that receives HTTP traffic (default: "web", or the only service)
+portico set my-app http-service api
+
+# Enable / disable HTTP
+portico set my-app http on
+portico set my-app http off
+
+# IP used to generate default domains (appname.IP.sslip.io)
+portico set external-ip 203.0.113.10
+```
+
+### Environment Variables and Secrets
+
+```bash
+portico env my-app [service-name] add KEY value
+portico env my-app [service-name] list
+portico env my-app [service-name] del KEY
+
+# Secrets are files in env/, mounted at /run/secrets/<name>
+portico secrets my-app [service-name] add db_password s3cr3t
+portico secrets my-app [service-name] list
+portico secrets my-app [service-name] del db_password
+```
+
 ### Domain Management
 
 ```bash
@@ -131,32 +192,33 @@ portico domains my-app remove example.com
 ### Port Management
 
 ```bash
-# Add port mapping
-portico ports my-app add 8080 3000 [--name service-name]
+# Publish container port 5432 on host port 5433
+portico ports my-app [service-name] add 5432 5433
 
-# Delete port mapping
-portico ports my-app delete 8080 3000 [--name service-name]
+# Remove a published port (host:container)
+portico ports my-app [service-name] delete 5433:5432
 
-# List port mappings
-portico ports my-app list [--name service-name]
+# List published ports
+portico ports my-app [service-name] list
 ```
 
-**Note**: If the application has only one service, the `--name` flag is optional.
+**Note**: If the application has only one service, `service-name` is optional.
+Services don't need published ports to receive HTTP traffic: Caddy reaches them over the internal network.
 
 ### Storage Management
 
 ```bash
 # Add volume mount
-portico storage my-app add /host/path /container/path [--name service-name]
+portico storage my-app [service-name] add /host/path /container/path
 
 # Delete volume mount
-portico storage my-app delete /host/path /container/path [--name service-name]
+portico storage my-app [service-name] delete /host/path /container/path
 
 # List volume mounts
-portico storage my-app list [--name service-name]
+portico storage my-app [service-name] list
 ```
 
-**Note**: If the application has only one service, the `--name` flag is optional.
+**Note**: If the application has only one service, `service-name` is optional.
 
 ### Addon Management
 
@@ -191,45 +253,74 @@ portico addons create my-db --type mysql --version 8.4.7 --mode dedicated --app 
 
 ```bash
 # Start addon instance
-portico addons up my-postgres
+portico addons my-postgres up
 
 # Stop addon instance
-portico addons down my-postgres
+portico addons my-postgres down
 
-# Delete addon instance
-portico addons delete my-postgres
+# Delete addon instance and its data (asks for confirmation)
+portico addons my-postgres delete
 ```
 
 #### Add Inline Addons (Redis/Valkey)
 
 ```bash
 # Add Redis as a service within an application
-portico addons add my-app redis --version 8
+portico addons my-app add redis --version 8
 
 # Add Valkey as a service within an application
-portico addons add my-app valkey --version 7.2
+portico addons my-app add valkey --version 7.2
 ```
 
 #### Link Application to Addon
 
 ```bash
 # Link application to a shared or dedicated addon instance
-portico addons link my-app my-postgres
+portico addons my-app link my-postgres [--database mydb]
 ```
 
-This automatically injects environment variables (host, port, database, user, password) into all services of the application.
+This creates the database (default: the app name) if needed and injects environment variables
+(host, port, database, user, password and a connection URL, e.g. `POSTGRES_URL`) into all services of the application.
+
+Addon passwords are randomly generated, and addon ports are only published on `127.0.0.1`
+(apps reach them over the internal Docker network).
+
+#### Admin Tools (Adminer / mongo-express)
+
+```bash
+# Adminer (PostgreSQL, MySQL, MariaDB): only on 127.0.0.1, reach it through an SSH tunnel
+portico addons create dbadmin --type adminer
+portico addons dbadmin up
+ssh -N -L 9080:127.0.0.1:9080 you@server   # then open http://localhost:9080
+
+# Also publish it on a domain (HTTPS + basic auth with a generated password)
+portico addons create dbadmin --type adminer --target my-postgres --domain db.example.com
+
+# mongo-express for a MongoDB instance (--target is required)
+portico addons create mongoadmin --type mongo-express --target my-mongo
+```
+
+In Adminer, log in with the database credentials (stored in
+`addons/instances/<db>/secrets/`); the server is the instance host shown by
+`portico addons instances` (e.g. `addon-my-postgres`). The tunnel needs a key added with
+`portico ssh add --admin` (git-only keys can't forward ports). The generated
+password is printed once and stored in `addons/instances/<tool>/secrets/admin_password`.
+Deleting the tool (`portico addons dbadmin delete`) also removes its proxy config.
+
+Installs made before admin tools existed must refresh the reverse proxy once so
+it loads the published tools: `portico init && cd /home/portico/reverse-proxy && docker compose up -d`.
 
 #### Database Management
 
 ```bash
 # Create database in addon instance
-portico addons database my-postgres create mydb
+portico addons my-postgres database create mydb
 
 # Delete database from addon instance
-portico addons database my-postgres delete mydb
+portico addons my-postgres database delete mydb
 
 # List databases in addon instance
-portico addons database my-postgres list
+portico addons my-postgres database list
 ```
 
 ### Available Addons
@@ -244,10 +335,24 @@ portico addons database my-postgres list
 ### Application Structure
 
 Each application has:
-- `app.yml` - Application configuration
-- `docker-compose.yml` - Service definitions
-- `Caddyfile` - Caddy configuration
+- `docker-compose.yml` - Service definitions; Portico metadata (domain, HTTP port/service, replicas) lives under `x-portico`
+- `Caddyfile` - Caddy configuration (regenerated by Portico; manual edits are detected)
 - `env/` - Secret files
+
+Every service joins the shared `portico-network` with the alias `<app>-<service>`,
+which is what Caddy proxies to.
+
+### Upgrading an existing server
+
+After updating the binary, refresh the templates and the reverse proxy
+(this keeps your `config.yml`):
+
+```bash
+sudo -u portico portico init
+cd /home/portico/reverse-proxy && sudo -u portico docker compose up -d
+# Regenerate each app's compose file and Caddyfile
+sudo -u portico portico reset my-app
+```
 
 ## Author
 

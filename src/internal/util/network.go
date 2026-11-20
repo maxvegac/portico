@@ -22,6 +22,11 @@ func GetServerIP() (string, error) {
 		if iface.Flags&net.FlagLoopback != 0 || iface.Flags&net.FlagUp == 0 {
 			continue
 		}
+		// Skip container/virtual bridges (docker0, br-xxxx, vethxxx, ...): their
+		// addresses are not reachable from outside the host.
+		if isVirtualInterface(iface.Name) {
+			continue
+		}
 
 		addrs, err := iface.Addrs()
 		if err != nil {
@@ -45,6 +50,16 @@ func GetServerIP() (string, error) {
 	}
 
 	return "", nil
+}
+
+// isVirtualInterface reports whether an interface name belongs to a container or virtual bridge
+func isVirtualInterface(name string) bool {
+	for _, prefix := range []string{"docker", "br-", "veth", "virbr", "cni", "flannel", "cali", "tun", "tap", "lxc", "lxd"} {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // IPToSSlipIO converts an IP address to sslip.io format (with dashes)
@@ -107,15 +122,15 @@ func GetServerIPWithFallback(configuredIP string) (string, error) {
 	}
 
 	// Try to get local IP first
-	localIP, err := GetServerIP()
-	if err == nil && localIP != "" {
+	localIP, localErr := GetServerIP()
+	if localErr == nil && localIP != "" {
 		return localIP, nil
 	}
 
 	// Fallback to external IP
 	externalIP, err := GetExternalIP()
 	if err != nil {
-		return "", fmt.Errorf("failed to get both local and external IP: local=%v, external=%w", err, err)
+		return "", fmt.Errorf("failed to get both local and external IP: local=%v, external=%w", localErr, err)
 	}
 
 	return externalIP, nil

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"text/template"
@@ -17,13 +18,78 @@ import (
 	"github.com/maxvegac/portico/src/internal/util"
 )
 
+// DefaultHTTPPort is the internal container port Caddy proxies to when none is configured
+const DefaultHTTPPort = 8080
+
 // App represents a Portico application
 type App struct {
-	Name        string            `yaml:"name"`
-	Domain      string            `yaml:"domain"`
-	Port        int               `yaml:"port"`
-	Environment map[string]string `yaml:"environment"`
-	Services    []Service         `yaml:"services"`
+	Name        string `yaml:"name"`
+	Domain      string `yaml:"domain"`
+	Port        int    `yaml:"port"`
+	HttpService string `yaml:"http_service"` // Service Caddy proxies to ("" = auto)
+	// DisabledHTTPPort is the port to restore when HTTP is re-enabled (Port is 0 while disabled)
+	DisabledHTTPPort int               `yaml:"-"`
+	Environment      map[string]string `yaml:"environment"`
+	Services         []Service         `yaml:"services"`
+}
+
+// FindService returns a pointer to the service with the given name, or nil
+func (a *App) FindService(name string) *Service {
+	for i := range a.Services {
+		if a.Services[i].Name == name {
+			return &a.Services[i]
+		}
+	}
+	return nil
+}
+
+// HTTPServiceName returns the service that receives HTTP traffic: the explicitly
+// configured one, otherwise "web", otherwise the only/first service (sorted by name).
+func (a *App) HTTPServiceName() string {
+	if a.HttpService != "" && a.FindService(a.HttpService) != nil {
+		return a.HttpService
+	}
+	if a.FindService("web") != nil {
+		return "web"
+	}
+	if len(a.Services) > 0 {
+		return a.Services[0].Name
+	}
+	return ""
+}
+
+// DockerServices converts the app services to docker services (replicas default to 1)
+func (a *App) DockerServices() []docker.Service {
+	var dockerServices []docker.Service
+	for _, svc := range a.Services {
+		replicas := svc.Replicas
+		if replicas == 0 {
+			replicas = 1
+		}
+		dockerServices = append(dockerServices, docker.Service{
+			Name:        svc.Name,
+			Image:       svc.Image,
+			Port:        svc.Port,
+			ExtraPorts:  svc.ExtraPorts,
+			Environment: svc.Environment,
+			Volumes:     svc.Volumes,
+			Secrets:     svc.Secrets,
+			DependsOn:   svc.DependsOn,
+			Replicas:    replicas,
+		})
+	}
+	return dockerServices
+}
+
+// Metadata returns the x-portico metadata for the app
+func (a *App) Metadata() *docker.PorticoMetadata {
+	return &docker.PorticoMetadata{
+		Domain:       a.Domain,
+		Port:         a.Port,
+		HttpEnabled:  a.Port > 0,
+		HttpService:  a.HttpService,
+		DisabledPort: a.DisabledHTTPPort,
+	}
 }
 
 // Service represents a service within an application
@@ -53,9 +119,30 @@ func NewManager(appsDir, templatesDir string) *Manager {
 	}
 }
 
+// AppDir returns the directory of an app after validating its name
+func (am *Manager) AppDir(name string) (string, error) {
+	if err := util.ValidateAppName(name); err != nil {
+		return "", err
+	}
+	return filepath.Join(am.AppsDir, name), nil
+}
+
+// Exists reports whether an app has been created (has a docker-compose.yml)
+func (am *Manager) Exists(name string) bool {
+	appDir, err := am.AppDir(name)
+	if err != nil {
+		return false
+	}
+	_, err = os.Stat(filepath.Join(appDir, "docker-compose.yml"))
+	return err == nil
+}
+
 // CreateAppDirectories creates app directory structure and default secrets
 func (am *Manager) CreateAppDirectories(name string) error {
-	appDir := filepath.Join(am.AppsDir, name)
+	appDir, err := am.AppDir(name)
+	if err != nil {
+		return err
+	}
 
 	// Create app directory
 	if err := os.MkdirAll(appDir, 0o755); err != nil {
@@ -68,6 +155,9 @@ func (am *Manager) CreateAppDirectories(name string) error {
 		return fmt.Errorf("error creating env directory: %w", err)
 	}
 
+	// When run as root, hand the directories to the portico user (git hooks run as portico)
+	_ = util.FixDirOwnership(appDir)
+
 	return nil
 }
 
@@ -79,7 +169,10 @@ func (am *Manager) CreateApp(name string, port int) error {
 
 // SaveApp saves an application configuration to docker-compose.yml
 func (am *Manager) SaveApp(app *App) error {
-	appDir := filepath.Join(am.AppsDir, app.Name)
+	appDir, err := am.AppDir(app.Name)
+	if err != nil {
+		return err
+	}
 	composeFile := filepath.Join(appDir, "docker-compose.yml")
 
 	// Check if docker-compose.yml exists
@@ -90,34 +183,15 @@ func (am *Manager) SaveApp(app *App) error {
 	// Use docker manager to update compose file
 	dm := docker.NewManager("") // Registry URL not needed for updates
 
-	// Convert app services to docker services
-	var dockerServices []docker.Service
-	for _, svc := range app.Services {
-		dockerServices = append(dockerServices, docker.Service{
-			Name:        svc.Name,
-			Image:       svc.Image,
-			Port:        svc.Port,
-			ExtraPorts:  svc.ExtraPorts,
-			Environment: svc.Environment,
-			Volumes:     svc.Volumes,
-			Secrets:     svc.Secrets,
-			DependsOn:   svc.DependsOn,
-		})
-	}
-
-	// Update metadata
-	metadata := &docker.PorticoMetadata{
-		Domain:      app.Domain,
-		Port:        app.Port,
-		HttpEnabled: app.Port > 0,
-	}
-
-	return dm.GenerateDockerCompose(appDir, dockerServices, metadata)
+	return dm.GenerateDockerCompose(appDir, app.DockerServices(), app.Metadata())
 }
 
 // LoadApp loads an application configuration from docker-compose.yml
 func (am *Manager) LoadApp(name string) (*App, error) {
-	appDir := filepath.Join(am.AppsDir, name)
+	appDir, err := am.AppDir(name)
+	if err != nil {
+		return nil, err
+	}
 	composeFile := filepath.Join(appDir, "docker-compose.yml")
 
 	// Check if docker-compose.yml exists
@@ -130,7 +204,10 @@ func (am *Manager) LoadApp(name string) (*App, error) {
 
 // LoadAppFromCompose loads application configuration from docker-compose.yml
 func (am *Manager) LoadAppFromCompose(name string) (*App, error) {
-	appDir := filepath.Join(am.AppsDir, name)
+	appDir, err := am.AppDir(name)
+	if err != nil {
+		return nil, err
+	}
 
 	// Use docker manager to load compose file
 	dm := docker.NewManager("") // Registry URL not needed for loading
@@ -143,12 +220,18 @@ func (am *Manager) LoadAppFromCompose(name string) (*App, error) {
 	domain := ""
 	port := 0
 	httpEnabled := false
+	httpService := ""
+	disabledPort := 0
+	var replicas map[string]int
 	if compose.XPortico != nil {
 		domain = compose.XPortico.Domain
 		httpEnabled = compose.XPortico.HttpEnabled
 		if httpEnabled {
 			port = compose.XPortico.Port
 		}
+		httpService = compose.XPortico.HttpService
+		disabledPort = compose.XPortico.DisabledPort
+		replicas = compose.XPortico.Replicas
 	}
 
 	// Convert services from docker-compose.yml format to App.Service format
@@ -158,40 +241,33 @@ func (am *Manager) LoadAppFromCompose(name string) (*App, error) {
 		if err != nil {
 			return nil, fmt.Errorf("error converting service %s: %w", svcName, err)
 		}
+		svc.Replicas = replicas[svcName]
 		services = append(services, *svc)
 	}
+	// Map iteration order is random; keep services in a stable order
+	sort.Slice(services, func(i, j int) bool { return services[i].Name < services[j].Name })
 
 	// Only generate domain based on IP if no domain is defined
 	// If domain is already set (even if .localhost), preserve it
 	if domain == "" {
-		// Load config to get configured external IP
-		cfg, err := config.LoadConfig()
-		configuredIP := ""
-		if err == nil {
-			configuredIP = cfg.ExternalIP
+		generated, err := defaultDomain(name)
+		if err != nil {
+			return nil, err
 		}
-		// Generate domain: appname.IP.sslip.io format
-		// sslip.io will resolve this based on the server's IP
-		serverIP, err := util.GetServerIPWithFallback(configuredIP)
-		if err == nil && serverIP != "" {
-			domain = util.AppNameToSSlipIO(name, serverIP)
-		} else {
-			// If both local and external IP detection fail, return error
-			return nil, fmt.Errorf("failed to detect server IP for domain generation: %w", err)
-		}
+		domain = generated
 	}
-	// Note: We don't auto-migrate .localhost domains here to preserve user-defined domains
-	// Users can manually update domains if needed
 
 	// Port is only set if HTTP is enabled
 	// If http_enabled is false, port remains 0
 
 	return &App{
-		Name:        name,
-		Domain:      domain,
-		Port:        port,                    // HTTP port (0 if HTTP disabled)
-		Environment: make(map[string]string), // App-level environment not stored in compose
-		Services:    services,
+		Name:             name,
+		Domain:           domain,
+		Port:             port, // HTTP port (0 if HTTP disabled)
+		HttpService:      httpService,
+		DisabledHTTPPort: disabledPort,
+		Environment:      make(map[string]string), // App-level environment not stored in compose
+		Services:         services,
 	}, nil
 }
 
@@ -216,36 +292,30 @@ func convertServiceFromCompose(name string, svcData interface{}) (*Service, erro
 		svc.Image = img
 	}
 
-	// Extract ports - primary port and extra ports
+	// Extract published ports. Every mapping is kept in ExtraPorts (the generator
+	// only writes ExtraPorts). The HTTP port lives in x-portico, not here.
 	if ports, ok := svcMap["ports"].([]interface{}); ok {
-		primaryPort := 0
 		for _, p := range ports {
-			portStr, ok := p.(string)
-			if !ok {
-				continue
-			}
-			// Parse port mapping "host:container" or just "port"
-			parts := strings.Split(portStr, ":")
-			if len(parts) == 2 {
-				containerPort, err := strconv.Atoi(parts[1])
-				if err == nil {
-					if primaryPort == 0 {
-						primaryPort = containerPort
-					} else {
-						svc.ExtraPorts = append(svc.ExtraPorts, portStr)
-					}
-				}
-			} else if len(parts) == 1 {
-				port, err := strconv.Atoi(parts[0])
-				if err == nil && primaryPort == 0 {
-					primaryPort = port
-				}
+			switch v := p.(type) {
+			case string:
+				svc.ExtraPorts = append(svc.ExtraPorts, v)
+			case int:
+				svc.ExtraPorts = append(svc.ExtraPorts, strconv.Itoa(v))
 			}
 		}
-		svc.Port = primaryPort
 	}
 
-	// Extract environment variables
+	// Extract environment variables (map form: KEY: value)
+	if env, ok := svcMap["environment"].(map[string]interface{}); ok {
+		for k, v := range env {
+			if v == nil {
+				svc.Environment[k] = ""
+			} else {
+				svc.Environment[k] = fmt.Sprintf("%v", v)
+			}
+		}
+	}
+	// Extract environment variables (list form: - KEY=value)
 	if env, ok := svcMap["environment"].([]interface{}); ok {
 		for _, e := range env {
 			envStr, ok := e.(string)
@@ -264,7 +334,7 @@ func convertServiceFromCompose(name string, svcData interface{}) (*Service, erro
 	if volumes, ok := svcMap["volumes"].([]interface{}); ok {
 		for _, v := range volumes {
 			volStr, ok := v.(string)
-			if ok && !strings.Contains(volStr, "/run/secrets") { // Exclude secrets mount
+			if ok && !docker.IsManagedVolume(volStr) { // Exclude secrets and logs mounts (added by Portico)
 				svc.Volumes = append(svc.Volumes, volStr)
 			}
 		}
@@ -310,7 +380,10 @@ func (am *Manager) ListApps() ([]string, error) {
 
 // DeleteApp deletes an application
 func (am *Manager) DeleteApp(name string) error {
-	appDir := filepath.Join(am.AppsDir, name)
+	appDir, err := am.AppDir(name)
+	if err != nil {
+		return err
+	}
 	return os.RemoveAll(appDir)
 }
 
@@ -358,7 +431,10 @@ func (am *Manager) CreateDefaultCaddyfile(name string) error {
 
 // CreateDefaultCaddyfileWithPrompt creates/updates Caddyfile with optional prompt for confirmation
 func (am *Manager) CreateDefaultCaddyfileWithPrompt(name string, prompt bool) error {
-	appDir := filepath.Join(am.AppsDir, name)
+	appDir, err := am.AppDir(name)
+	if err != nil {
+		return err
+	}
 	caddyfilePath := filepath.Join(appDir, "Caddyfile")
 
 	// Check for manual changes if Caddyfile exists
@@ -375,158 +451,115 @@ func (am *Manager) CreateDefaultCaddyfileWithPrompt(name string, prompt bool) er
 			response, _ := reader.ReadString('\n')
 			response = strings.TrimSpace(response)
 			if !strings.EqualFold(response, "y") && !strings.EqualFold(response, "yes") {
-				return fmt.Errorf("cancelled by user")
+				return ErrCancelled
 			}
 		}
 	}
 
-	// Load docker-compose.yml directly (single source of truth)
-	dm := docker.NewManager("") // Registry URL not needed for loading
-	compose, err := dm.LoadComposeFile(appDir)
+	// docker-compose.yml is the single source of truth
+	a, err := am.LoadApp(name)
 	if err != nil {
-		return fmt.Errorf("error loading docker-compose.yml: %w", err)
+		return err
 	}
 
-	// Check if HTTP is enabled
-	if compose.XPortico == nil || !compose.XPortico.HttpEnabled {
+	if a.Port == 0 {
 		return fmt.Errorf("HTTP is not enabled for app %s (background worker, no Caddyfile needed)", name)
 	}
-
-	// Get domain and port from metadata
-	domain := compose.XPortico.Domain
-
-	// Get services from docker-compose.yml first (needed for domain generation)
-	if len(compose.Services) == 0 {
+	if len(a.Services) == 0 {
 		return fmt.Errorf("no services found in app %s", name)
 	}
 
-	// Find the HTTP service name
-	// Prefer "web" service if it exists, otherwise use first service available
-	var httpServiceName string
-	if _, exists := compose.Services["web"]; exists {
-		httpServiceName = "web"
-	} else {
-		// Use first service available
-		for svcName := range compose.Services {
-			httpServiceName = svcName
-			break
-		}
-	}
-
-	// Only generate domain based on IP if no domain is defined
-	// If domain is already set, preserve it (don't auto-migrate)
-	if domain == "" {
-		// Load config to get configured external IP
-		cfg, err := config.LoadConfig()
-		configuredIP := ""
-		if err == nil {
-			configuredIP = cfg.ExternalIP
-		}
-		// No domain defined, generate appname.IP.sslip.io format
-		// sslip.io will resolve this based on the server's IP
-		serverIP, err := util.GetServerIPWithFallback(configuredIP)
-		if err == nil && serverIP != "" {
-			domain = util.AppNameToSSlipIO(name, serverIP)
-		} else {
-			// If both local and external IP detection fail, return error
-			return fmt.Errorf("failed to detect server IP for domain generation: %w", err)
-		}
-	} else if strings.HasSuffix(domain, ".sslip.io") {
-		// Migrate old format appname.sslip.io to appname.IP.sslip.io
-		// Check if it's the old format (appname.sslip.io without IP embedded)
-		expectedOldFormat := fmt.Sprintf("%s.sslip.io", name)
-		if domain == expectedOldFormat {
-			// Load config to get configured external IP
-			cfg, err := config.LoadConfig()
-			configuredIP := ""
-			if err == nil {
-				configuredIP = cfg.ExternalIP
-			}
-			// Migrate to new format
-			serverIP, err := util.GetServerIPWithFallback(configuredIP)
-			if err == nil && serverIP != "" {
-				domain = util.AppNameToSSlipIO(name, serverIP)
-				// Update compose metadata (will be saved when SaveApp is called)
-				if compose.XPortico != nil {
-					compose.XPortico.Domain = domain
-				}
+	domain := a.Domain
+	if strings.HasSuffix(domain, ".sslip.io") && domain == fmt.Sprintf("%s.sslip.io", name) {
+		// Migrate old format appname.sslip.io (which does not resolve) to appname.IP.sslip.io
+		if migrated, err := defaultDomain(name); err == nil {
+			domain = migrated
+			a.Domain = migrated
+			if err := am.SaveApp(a); err != nil {
+				return fmt.Errorf("error saving migrated domain: %w", err)
 			}
 		}
 	}
-	// Note: We don't auto-migrate .localhost domains here to preserve user-defined domains
 
-	httpPort := compose.XPortico.Port
-	if httpPort == 0 {
-		return fmt.Errorf("HTTP port not configured for app %s", name)
-	}
-
-	// Get project name from docker-compose.yml (from "name:" field)
-	// Always use directory name to ensure consistency with Docker Compose project naming
-	// Docker Compose uses project name as prefix: appname-servicename
-	// Use the app name parameter as primary source (most reliable)
-	projectName := name
-	// Prefer compose.Name if it exists (should match directory name)
-	if compose.Name != "" {
-		projectName = compose.Name
-	}
-	// Final fallback: use directory name if everything else fails
-	if projectName == "" {
-		projectName = filepath.Base(appDir)
-	}
-
-	// Use the HTTP service name we found earlier
-	serviceName := httpServiceName
-
-	if serviceName == "" {
-		return fmt.Errorf("no service found in app %s", name)
-	}
-
-	// Load template from filesystem first, then embedded files
-	templateData, err := embed.LoadTemplate(am.TemplatesDir, "caddy-app.tmpl")
+	content, err := am.RenderCaddyfile(a.Name, domain, a.HTTPServiceName(), a.Port)
 	if err != nil {
-		return fmt.Errorf("error reading caddy-app template: %w", err)
+		return err
 	}
 
-	t, err := template.New("caddy-app").Parse(string(templateData))
-	if err != nil {
-		return fmt.Errorf("error parsing caddy-app template: %w", err)
-	}
-
-	// Create output file
-	file, err := os.Create(caddyfilePath)
-	if err != nil {
-		return fmt.Errorf("error creating Caddyfile: %w", err)
-	}
-	defer func() { _ = file.Close() }()
-
-	// Execute template
-	// Use project name from docker-compose.yml for DNS resolution
-	// Ensure AppName is never empty - always use directory name as fallback
-	if projectName == "" {
-		projectName = name
-	}
-	templateVars := struct {
-		AppName     string
-		Domain      string
-		ServiceName string
-		Port        int
-	}{
-		AppName:     projectName, // Use project name from docker-compose.yml
-		Domain:      domain,
-		ServiceName: serviceName,
-		Port:        httpPort,
-	}
-	if err := t.Execute(file, templateVars); err != nil {
-		return fmt.Errorf("error executing caddy-app template: %w", err)
-	}
-
-	// Close file explicitly before fixing ownership (defer will handle if this fails)
-	if err := file.Close(); err != nil {
-		return fmt.Errorf("error closing Caddyfile: %w", err)
+	if err := util.WriteFileAtomic(caddyfilePath, content, 0o644); err != nil {
+		return fmt.Errorf("error writing Caddyfile: %w", err)
 	}
 
 	// Fix file ownership if running as root
 	_ = util.FixFileOwnership(caddyfilePath)
 
 	return nil
+}
+
+// ErrCancelled is returned when the user declines a confirmation prompt
+var ErrCancelled = fmt.Errorf("cancelled by user")
+
+// caddyHashPlaceholder is substituted by the real hash after rendering
+const caddyHashPlaceholder = "__PORTICO_HASH__"
+
+// RenderCaddyfile renders the per-app Caddyfile, including the hash comment used
+// by DetectCaddyfileChanges to detect manual edits.
+func (am *Manager) RenderCaddyfile(appName, domain, serviceName string, port int) ([]byte, error) {
+	templateData, err := embed.LoadTemplate(am.TemplatesDir, "caddy-app.tmpl")
+	if err != nil {
+		return nil, fmt.Errorf("error reading caddy-app template: %w", err)
+	}
+
+	t, err := template.New("caddy-app").Parse(string(templateData))
+	if err != nil {
+		return nil, fmt.Errorf("error parsing caddy-app template: %w", err)
+	}
+
+	templateVars := struct {
+		AppName       string
+		Domain        string
+		ServiceName   string
+		Upstream      string
+		Port          int
+		GeneratedHash string
+	}{
+		AppName:       appName,
+		Domain:        domain,
+		ServiceName:   serviceName,
+		Upstream:      docker.ServiceAlias(appName, serviceName),
+		Port:          port,
+		GeneratedHash: caddyHashPlaceholder,
+	}
+
+	var buf strings.Builder
+	if err := t.Execute(&buf, templateVars); err != nil {
+		return nil, fmt.Errorf("error executing caddy-app template: %w", err)
+	}
+	rendered := buf.String()
+
+	// Hash the content without the hash comment (same as DetectCaddyfileChanges does)
+	withoutHash := strings.Replace(rendered, "# Portico Generated - Hash: "+caddyHashPlaceholder, "", 1)
+	sum := sha256.Sum256([]byte(withoutHash))
+	return []byte(strings.Replace(rendered, caddyHashPlaceholder, fmt.Sprintf("%x", sum), 1)), nil
+}
+
+// defaultDomain returns appname.IP.sslip.io using the configured or detected server IP
+func defaultDomain(name string) (string, error) {
+	configuredIP := ""
+	if cfg, err := config.LoadConfig(); err == nil {
+		configuredIP = cfg.ExternalIP
+	}
+	serverIP, err := util.GetServerIPWithFallback(configuredIP)
+	if err != nil {
+		return "", fmt.Errorf("failed to detect server IP for domain generation: %w", err)
+	}
+	if serverIP == "" {
+		return "", fmt.Errorf("failed to detect server IP for domain generation")
+	}
+	return util.AppNameToSSlipIO(name, serverIP), nil
+}
+
+// DefaultDomain returns the default sslip.io domain for an app
+func DefaultDomain(name string) (string, error) {
+	return defaultDomain(name)
 }

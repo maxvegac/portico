@@ -1,4 +1,7 @@
 .cache/
+# Portico binary built in the repo root (use `make build` -> bin/)
+/portico
+
 # Binaries for programs and plugins
 *.exe
 *.exe~

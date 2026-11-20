@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/maxvegac/portico/src/internal/config"
+	"github.com/maxvegac/portico/src/internal/util"
 )
 
 // NewAppsCdCmd creates the apps cd command
@@ -27,6 +28,10 @@ func NewAppsCdCmd() *cobra.Command {
 				return
 			}
 
+			if err := util.ValidateAppName(appName); err != nil {
+				fmt.Printf("Error: %v\n", err)
+				return
+			}
 			appDir := filepath.Join(cfg.AppsDir, appName)
 
 			// Check if app directory exists
